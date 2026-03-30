@@ -823,7 +823,9 @@ function drawCurrentVectors(t){
   for(let px=sp/2;px<W;px+=sp){
     for(let py=sp/2;py<H;py+=sp){
       const[lat,lng]=canvasToGeo(px,py);
-      if(lng<-80.35)continue;
+      // Skip if clearly on land (rough check using depth model)
+      const d=depthAt(lat,lng);
+      if(d!==null && d<2) continue; // depth < 2ft = land
       const cur=interpCurrentAt(lat,lng);
       if(!cur||cur.speed_kt<0.02)continue;
       const ar=cur.dir_deg*Math.PI/180;
@@ -908,7 +910,8 @@ function detectEddies(){
     const curlMag=Math.abs(curl);
     const speed_kt=cluster.reduce((s,p)=>s+p.speed_kt,0)/cluster.length;
     const radius_deg=Math.max(0.12,Math.min(0.5,cluster.length*0.08));
-    if(lng<-80.35||curlMag<0.01&&speed_kt<0.5)continue;
+    const ed=depthAt(lat,lng); if(ed!==null&&ed<5) continue; // skip land
+    if(curlMag<0.01&&speed_kt<0.5)continue;
     detectedEddies.push({lat,lng,radius_deg,curl,curlMag,sense:curl>0?'CCW':'CW',speed_kt});
   }
   detectedEddies.sort((a,b)=>b.curlMag-a.curlMag);
@@ -1168,14 +1171,19 @@ function loop(ts){
     if(vKey!==loop._lastVKey){
       loop._lastVKey=vKey;
       bgCacheKey='';contourCacheKey='';
-      Object.keys(satCache).forEach(k=>satCache[k].key='');
-      drawSatellite();
-      loadAllSatellite();
+      // Clear ALL sat cache images so old tiles don't paint at wrong position
+      Object.keys(satCache).forEach(k=>{satCache[k].key='';satCache[k].img=null;});
+      // Clear satellite canvas immediately — better blank than misaligned
+      satCtx.clearRect(0,0,satCvs.width,satCvs.height);
+      // Debounce: only start loading after panning settles (300ms)
+      clearTimeout(loop._satTimer);
+      loop._satTimer=setTimeout(loadAllSatellite, 300);
     }
   }
   requestAnimationFrame(loop);
 }
 loop._lastVKey='';
+loop._satTimer=null;
 requestAnimationFrame(loop);
 
 // ═══════════════════════════════════════════
