@@ -379,6 +379,22 @@ html,body{height:100%;overflow:hidden;background:#000;color:var(--text);font-fam
       <div class="aiico">🤖</div>
       <div><div class="aittl">AI Fish Intel</div><div class="aisub">Claude · Real Satellite Data</div></div>
     </div>
+
+    <!-- SPECIES SELECTOR -->
+    <div id="species-panel" style="padding:13px 14px;border-bottom:1px solid var(--border);flex-shrink:0;">
+      <div style="font-family:'Bebas Neue';font-size:11px;letter-spacing:2px;color:var(--teal);margin-bottom:10px;display:flex;align-items:center;gap:5px;">
+        <span style="width:3px;height:13px;background:var(--teal);border-radius:2px;display:inline-block"></span>
+        TARGET SPECIES
+      </div>
+      <div id="species-grid" style="display:grid;grid-template-columns:1fr 1fr;gap:5px;margin-bottom:10px;">
+      </div>
+      <div style="display:flex;gap:5px;margin-bottom:10px;">
+        <button onclick="selectAllSpecies()" style="flex:1;padding:4px;border-radius:3px;border:1px solid var(--border);background:transparent;color:var(--muted);font-family:'Space Mono';font-size:8px;cursor:pointer" onmouseover="this.style.borderColor='var(--teal)';this.style.color='var(--teal)'" onmouseout="this.style.borderColor='var(--border)';this.style.color='var(--muted)'">All</button>
+        <button onclick="clearAllSpecies()" style="flex:1;padding:4px;border-radius:3px;border:1px solid var(--border);background:transparent;color:var(--muted);font-family:'Space Mono';font-size:8px;cursor:pointer" onmouseover="this.style.borderColor='var(--hot)';this.style.color='var(--hot)'" onmouseout="this.style.borderColor='var(--border)';this.style.color='var(--muted)'">None</button>
+      </div>
+      <div id="season-hint" style="font-size:9px;color:var(--muted);font-family:'Space Mono';line-height:1.6;background:#ffffff05;border:1px solid var(--border);border-radius:4px;padding:6px 8px;"></div>
+    </div>
+
     <div id="aibody">
       <div class="aimt">
         <div class="aimt-ico">🛰️</div>
@@ -491,6 +507,76 @@ document.getElementById('date-input').max = new Date().toISOString().split('T')[
 // CLOCK
 // ═══════════════════════════════════════════
 setInterval(()=>{document.getElementById('clock').textContent=new Date().toLocaleTimeString('en-US',{hour:'2-digit',minute:'2-digit',second:'2-digit'});},1000);
+
+// ═══════════════════════════════════════════
+// SPECIES DATA
+// ═══════════════════════════════════════════
+const SPECIES = [
+  {id:'bluemarlin',  name:'Blue Marlin',    ico:'🔵', depth:'600-1800ft', sst:'78-88°F',
+   notes:'Deep water, thermocline edges, blue water. Peak: June-Sept off FL.'},
+  {id:'whitemarlin', name:'White Marlin',   ico:'⚪', depth:'100-600ft',  sst:'72-82°F',
+   notes:'Canyon edges, temperature breaks. Peak: May-Oct mid-Atlantic.'},
+  {id:'sailfish',    name:'Sailfish',       ico:'⛵', depth:'60-300ft',   sst:'72-82°F',
+   notes:'Close to shore, bait schools, rips. FL peak: Nov-Apr.'},
+  {id:'dolphin',     name:'Mahi-Mahi',      ico:'🐬', depth:'100-400ft',  sst:'75-85°F',
+   notes:'Weedlines, color changes, floating debris. Spring-Fall.'},
+  {id:'wahoo',       name:'Wahoo',          ico:'⚡', depth:'200-600ft',  sst:'74-84°F',
+   notes:'Fast current edges, ledges, drop-offs. Year-round FL.'},
+  {id:'yellowfin',   name:'Yellowfin Tuna', ico:'🟡', depth:'300-1200ft', sst:'68-78°F',
+   notes:'Cold/warm breaks, Gulf Stream edge. Peak: Oct-Feb.'},
+  {id:'blackfin',    name:'Blackfin Tuna',  ico:'⚫', depth:'80-400ft',   sst:'68-78°F',
+   notes:'Near reefs, shelf break, color changes. Year-round FL.'},
+  {id:'swordfish',   name:'Swordfish',      ico:'🗡️',  depth:'1000-2000ft',sst:'65-78°F',
+   notes:'Very deep, nighttime daytime bite. Year-round offshore.'},
+  {id:'kingfish',    name:'Kingfish',       ico:'👑', depth:'60-200ft',   sst:'68-80°F',
+   notes:'Reefs, ledges, near shore. Fall-Spring FL.'},
+  {id:'cobia',       name:'Cobia',          ico:'🟤', depth:'30-200ft',   sst:'68-80°F',
+   notes:'Structure, buoys, rays. Spring migration FL.'},
+  {id:'amberjack',   name:'Amberjack',      ico:'🟠', depth:'60-400ft',   sst:'65-82°F',
+   notes:'Deep reefs, wrecks, ledges. Year-round.'},
+  {id:'grouper',     name:'Grouper',        ico:'🐟', depth:'80-500ft',   sst:'65-80°F',
+   notes:'Bottom structure, ledges, reefs. Year-round.'},
+];
+
+let selectedSpecies = new Set(['bluemarlin','dolphin','sailfish','wahoo','yellowfin']);
+
+function initSpeciesGrid(){
+  const grid = document.getElementById('species-grid');
+  grid.innerHTML = SPECIES.map(s=>`
+    <button class="sp-btn${selectedSpecies.has(s.id)?' on':''}" id="sp-${s.id}" onclick="toggleSpecies('${s.id}')">
+      <span class="sp-ico">${s.ico}</span>
+      <div>
+        <div class="sp-name">${s.name}</div>
+        <div class="sp-depth">${s.depth}</div>
+      </div>
+    </button>`).join('');
+  updateSeasonHint();
+}
+
+function toggleSpecies(id){
+  if(selectedSpecies.has(id)) selectedSpecies.delete(id);
+  else selectedSpecies.add(id);
+  const btn = document.getElementById('sp-'+id);
+  btn.classList.toggle('on', selectedSpecies.has(id));
+  updateSeasonHint();
+}
+
+function selectAllSpecies(){ SPECIES.forEach(s=>{selectedSpecies.add(s.id);document.getElementById('sp-'+s.id)?.classList.add('on');}); updateSeasonHint(); }
+function clearAllSpecies(){ selectedSpecies.clear(); SPECIES.forEach(s=>document.getElementById('sp-'+s.id)?.classList.remove('on')); updateSeasonHint(); }
+
+function updateSeasonHint(){
+  const el = document.getElementById('season-hint');
+  if(!el) return;
+  if(selectedSpecies.size===0){el.textContent='Select species to target';return;}
+  const month=['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'][new Date().getMonth()];
+  const sel = SPECIES.filter(s=>selectedSpecies.has(s.id));
+  // Find common depth/SST range
+  const depths = sel.map(s=>s.depth).join(' · ');
+  const hint = sel.length===1
+    ? sel[0].notes
+    : `${sel.length} species · ${month} targeting`;
+  el.innerHTML = `<span style="color:var(--teal)">${sel.map(s=>s.ico).join(' ')}</span><br>${hint}`;
+}
 
 // ═══════════════════════════════════════════
 // KEY MANAGEMENT
@@ -1440,11 +1526,19 @@ async function runAnalysis(){
   const satContext=`NASA GIBS satellite imagery (${selectedDate}): Chlorophyll (VIIRS SNPP 1km daily) and SST (MODIS Aqua 4km 8-day) overlays active. Real satellite data showing current ocean color and temperature patterns.`;
 
   const month=['January','February','March','April','May','June','July','August','September','October','November','December'][new Date().getMonth()];
+  
+  // Build species context
+  const targetSpecies = SPECIES.filter(s=>selectedSpecies.has(s.id));
+  const speciesContext = targetSpecies.length > 0
+    ? 'TARGET SPECIES:\n' + targetSpecies.map(s=>
+        `- ${s.name}: optimal depth ${s.depth}, SST ${s.sst}. ${s.notes}`
+      ).join('\n')
+    : 'TARGET SPECIES: All offshore pelagics';
 
-  const prompt=`You are an expert offshore fishing guide for the US East Coast from New York to the Florida Keys. Analyze this REAL oceanographic data.
+  const prompt=`You are an expert offshore fishing guide for the US East Coast from New York to the Florida Keys. Analyze this REAL oceanographic data. Focus SPECIFICALLY on the target species requested.
 
 SATELLITE DATA (${selectedDate}):
-${satContext}
+${satContext}\n\n${speciesContext}
 
 LIVE OCEAN CURRENTS:
 ${curSummary}
@@ -1464,7 +1558,7 @@ Respond ONLY valid JSON:
     const res=await fetch('https://api.anthropic.com/v1/messages',{
       method:'POST',
       headers:{'Content-Type':'application/json','x-api-key':apiKey,'anthropic-version':'2023-06-01','anthropic-dangerous-direct-browser-access':'true'},
-      body:JSON.stringify({model:'claude-sonnet-4-20250514',max_tokens:1200,system:'Expert offshore fishing guide for Treasure Coast Florida. Respond only valid JSON.',messages:[{role:'user',content:prompt}]})
+      body:JSON.stringify({model:'claude-sonnet-4-20250514',max_tokens:1200,system:'You are an expert offshore fishing guide for the US East Coast. You specialize in blue water pelagic fishing. Always focus your analysis on the specific target species requested. Respond only with valid JSON.',messages:[{role:'user',content:prompt}]})
     });
     if(!res.ok){const e=await res.json();throw new Error(e.error?.message||`HTTP ${res.status}`);}
     const data=await res.json();
@@ -1520,6 +1614,7 @@ function renderResults(data){
 // INIT
 // ═══════════════════════════════════════════
 window.addEventListener('load',()=>{
+  initSpeciesGrid();
   setTimeout(()=>{
     fetchCurrentData();
     loadAllSatellite();
