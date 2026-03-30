@@ -728,7 +728,7 @@ let chlTrend = null; // populated before AI analysis
 async function fetchChlTrend(){
   // Fetch chl images for 4 dates and sample pixel values at offshore grid points
   const dates = [];
-  for(const daysBack of [0, 2, 4, 7]){
+  for(const daysBack of [0, 1, 2]){
     const d = new Date(selectedDate+'T12:00:00Z');
     d.setDate(d.getDate() - daysBack);
     dates.push(d.toISOString().split('T')[0]);
@@ -809,7 +809,7 @@ async function fetchChlTrend(){
   chlTrend = { snapshots, trend, delta, pct };
 
   const trendStr = snapshots.map(s=>`${s.date}: index=${s.chlIndex}`).join(', ');
-  return `CHLOROPHYLL TREND (${snapshots.length} days): ${trend} ${pct}% over ${snapshots.length-1} observations. ${trendStr}. ${
+  return `CHLOROPHYLL TREND (${snapshots.length} days): ${trend} ${pct}% over 2 days. ${trendStr}. ${
     trend==='CONCENTRATING' ? 'Bait is actively aggregating — fish are moving in.' :
     trend==='DISPERSING'    ? 'Bait is spreading out — fish may be scattered.' :
     'Bait concentration holding steady.'
@@ -1702,9 +1702,26 @@ function renderResults(data){
     const c=PC[i]||'#00d4b8';
     const cc={High:'#5dffaa',Medium:'#f5a623',Low:'#ff4e2a'}[hs.confidence]||'#00d4b8';
     if(hs.lat&&hs.lng){hotspots[i]={...hs};if(i===0)panTo(hs.lat,hs.lng);}
+    const latD = hs.lat ? Math.abs(hs.lat) : 0;
+    const lngD = hs.lng ? Math.abs(hs.lng) : 0;
+    const latMin = ((latD % 1) * 60).toFixed(3);
+    const lngMin = ((lngD % 1) * 60).toFixed(3);
+    const dmsCoord = hs.lat ? `${Math.floor(latD)}°${latMin}'N  ${Math.floor(lngD)}°${lngMin}'W` : '';
+    const ddCoord  = hs.lat ? `${hs.lat.toFixed(4)}°N  ${Math.abs(hs.lng||0).toFixed(4)}°W` : '';
     html+=`<div class="hs" style="border-left-color:${c}" onclick="panTo(${hs.lat},${hs.lng})">
-      <div style="display:flex;justify-content:space-between"><div class="hsn" style="color:${c}">${i+1}. ${hs.name}</div><div class="conf" style="color:${cc}">${hs.confidence}</div></div>
-      <div class="hsl">📍 ${hs.location}<br>${hs.lat?.toFixed(4)}°N  ${Math.abs(hs.lng||0).toFixed(4)}°W</div>
+      <div style="display:flex;justify-content:space-between;align-items:flex-start">
+        <div class="hsn" style="color:${c}">${i+1}. ${hs.name}</div>
+        <div class="conf" style="color:${cc}">${hs.confidence}</div>
+      </div>
+      <div class="hsl">📍 ${hs.location}</div>
+      <div style="background:#ffffff08;border:1px solid ${c}44;border-radius:4px;padding:6px 8px;margin:5px 0;font-family:'Space Mono';">
+        <div style="font-size:10px;color:${c};letter-spacing:0.5px">${dmsCoord}</div>
+        <div style="font-size:8px;color:var(--muted);margin-top:2px">${ddCoord}</div>
+        <div style="font-size:8px;color:var(--muted);margin-top:3px;display:flex;gap:8px">
+          <span>📋 <span onclick="event.stopPropagation();navigator.clipboard?.writeText('${ddCoord}').then(()=>{this.textContent='Copied!';setTimeout(()=>this.textContent='Copy DD',1200)})" style="cursor:pointer;color:var(--teal)" id="copy-dd-${i}">Copy DD</span></span>
+          <span>📋 <span onclick="event.stopPropagation();navigator.clipboard?.writeText('${dmsCoord}').then(()=>{this.textContent='Copied!';setTimeout(()=>this.textContent='Copy DMS',1200)})" style="cursor:pointer;color:var(--teal)" id="copy-dms-${i}">Copy DMS</span></span>
+        </div>
+      </div>
       <div class="hsw">${hs.why}</div>
       <div class="hst">🎣 ${hs.technique}</div>
       <div class="tags">${(hs.species||[]).map(s=>`<span class="tag">${s}</span>`).join('')}</div>
