@@ -876,20 +876,28 @@ function detectEddies(){
   if(currentGrid.length<6){detectedEddies=[];updateEddySidebar();return;}
   const DEG_TO_KM=111.0;
   const candidates=[];
+  // Only analyze points visible on screen right now
+  const b=getViewBounds();
+  const pad=1.0; // 1° padding beyond screen edge
+  const visibleGrid=currentGrid.filter(p=>
+    p.lat>=b.south-pad && p.lat<=b.north+pad &&
+    p.lng>=b.west-pad  && p.lng<=b.east+pad
+  );
+  if(visibleGrid.length<4){detectedEddies=[];updateEddySidebar();return;}
   // Compute grid spacing from unique lat/lng values
-  const _uls=[...new Set(currentGrid.map(p=>p.lat))].sort((a,b)=>a-b);
-  const _uln=[...new Set(currentGrid.map(p=>p.lng))].sort((a,b)=>a-b);
-  detectEddies._dLat=_uls.length>1?(_uls[_uls.length-1]-_uls[0])/(_uls.length-1)*0.8:1.5;
-  detectEddies._dLng=_uln.length>1?(_uln[_uln.length-1]-_uln[0])/(_uln.length-1)*0.8:2.0;
-  for(let i=0;i<currentGrid.length;i++){
-    const p=currentGrid[i];
+  const _uls=[...new Set(visibleGrid.map(p=>p.lat))].sort((a,b)=>a-b);
+  const _uln=[...new Set(visibleGrid.map(p=>p.lng))].sort((a,b)=>a-b);
+  detectEddies._dLat=_uls.length>1?(_uls[_uls.length-1]-_uls[0])/(_uls.length-1)*0.8:0.6;
+  detectEddies._dLng=_uln.length>1?(_uln[_uln.length-1]-_uln[0])/(_uln.length-1)*0.8:0.6;
+  for(let i=0;i<visibleGrid.length;i++){
+    const p=visibleGrid[i];
     // Adaptive neighbour thresholds based on actual grid spacing
     const latSpacing=detectEddies._dLat;
     const lngSpacing=detectEddies._dLng;
-    const right=currentGrid.find(q=>Math.abs(q.lat-p.lat)<latSpacing*0.6&&q.lng>p.lng&&Math.abs(q.lng-p.lng)<lngSpacing*1.4);
-    const left=currentGrid.find(q=>Math.abs(q.lat-p.lat)<latSpacing*0.6&&q.lng<p.lng&&Math.abs(q.lng-p.lng)<lngSpacing*1.4);
-    const up=currentGrid.find(q=>Math.abs(q.lng-p.lng)<lngSpacing*0.6&&q.lat>p.lat&&Math.abs(q.lat-p.lat)<latSpacing*1.4);
-    const down=currentGrid.find(q=>Math.abs(q.lng-p.lng)<lngSpacing*0.6&&q.lat<p.lat&&Math.abs(q.lat-p.lat)<latSpacing*1.4);
+    const right=visibleGrid.find(q=>Math.abs(q.lat-p.lat)<latSpacing*0.6&&q.lng>p.lng&&Math.abs(q.lng-p.lng)<lngSpacing*1.4);
+    const left=visibleGrid.find(q=>Math.abs(q.lat-p.lat)<latSpacing*0.6&&q.lng<p.lng&&Math.abs(q.lng-p.lng)<lngSpacing*1.4);
+    const up=visibleGrid.find(q=>Math.abs(q.lng-p.lng)<lngSpacing*0.6&&q.lat>p.lat&&Math.abs(q.lat-p.lat)<latSpacing*1.4);
+    const down=visibleGrid.find(q=>Math.abs(q.lng-p.lng)<lngSpacing*0.6&&q.lat<p.lat&&Math.abs(q.lat-p.lat)<latSpacing*1.4);
     if(!right||!left||!up||!down)continue;
     const dx=(right.lng-left.lng)*DEG_TO_KM*Math.cos(p.lat*Math.PI/180);
     const dy=(up.lat-down.lat)*DEG_TO_KM;
@@ -1183,6 +1191,8 @@ function loop(ts){
       Object.keys(satCache).forEach(k=>{satCache[k].key='';satCache[k].img=null;});
       // Clear satellite canvas immediately — better blank than misaligned
       satCtx.clearRect(0,0,satCvs.width,satCvs.height);
+      // Re-run eddy detection for new viewport
+      if(currentGrid.length>=6) detectEddies();
       // Debounce: only start loading after panning settles (300ms)
       clearTimeout(loop._satTimer);
       loop._satTimer=setTimeout(loadAllSatellite, 300);
