@@ -722,6 +722,100 @@ async function loadAllSatellite(){
   drawSatellite();
 }
 
+// ── Multi-day chlorophyll trend analysis ──
+let chlTrend = null; // populated before AI analysis
+
+async function fetchChlTrend(){
+  // Fetch chl images for 4 dates and sample pixel values at offshore grid points
+  const dates = [];
+  for(const daysBack of [0, 2, 4, 7]){
+    const d = new Date(selectedDate+'T12:00:00Z');
+    d.setDate(d.getDate() - daysBack);
+    dates.push(d.toISOString().split('T')[0]);
+  }
+
+  const b = getViewBounds();
+  const W = 128, H = 128; // small sample size — just for pixel analysis
+  
+  const snapshots = [];
+  for(const date of dates){
+    try{
+      const res = await fetch('/.netlify/functions/claude',{
+        method:'POST',
+        headers:{'Content-Type':'application/json'},
+        body:JSON.stringify({
+          type:'gibs',
+          layer: GIBS_LAYERS.chl[0], // NOAA-20 VIIRS
+          date, west:b.west.toFixed(3), south:b.south.toFixed(3),
+          east:b.east.toFixed(3), north:b.north.toFixed(3),
+          width:W, height:H
+        })
+      });
+      if(!res.ok) continue;
+      const data = await res.json();
+      if(data.error || !data.image) continue;
+
+      // Draw to offscreen canvas and sample pixels
+      const img = new Image();
+      await new Promise((resolve,reject)=>{
+        img.onload=resolve; img.onerror=reject;
+        img.src=`data:image/png;base64,${data.image}`;
+        setTimeout(()=>reject(new Error('timeout')), 8000);
+      });
+
+      const oc = document.createElement('canvas');
+      oc.width=W; oc.height=H;
+      const ox = oc.getContext('2d');
+      ox.drawImage(img,0,0,W,H);
+
+      // Sample a grid of offshore points (skip land = black pixels)
+      let totalGreen=0, totalBlue=0, validPx=0;
+      const step=8;
+      for(let px=step;px<W-step;px+=step){
+        for(let py=step;py<H-step;py+=step){
+          const d2 = ox.getImageData(px,py,1,1).data;
+          const r=d2[0],g=d2[1],b2=d2[2],a=d2[3];
+          if(a<10 || (r<5&&g<5&&b2<5)) continue; // transparent or black = no data/land
+          totalGreen += g;
+          totalBlue  += b2;
+          validPx++;
+        }
+      }
+
+      if(validPx > 0){
+        // Green channel = high chl, blue channel = low chl (NASA colormap)
+        const avgGreen = totalGreen / validPx;
+        const avgBlue  = totalBlue  / validPx;
+        const chlIndex = avgGreen / (avgGreen + avgBlue + 1); // 0=low, 1=high
+        snapshots.push({ date, chlIndex: Math.round(chlIndex*1000)/1000, validPx });
+      }
+    } catch(e){
+      console.info('Chl trend fetch failed for', date, e.message);
+    }
+  }
+
+  if(snapshots.length < 2){
+    chlTrend = null;
+    return 'Chlorophyll trend unavailable (cloud cover or data gap)';
+  }
+
+  // Analyze trend: newest first
+  const newest = snapshots[0];
+  const oldest = snapshots[snapshots.length-1];
+  const delta  = newest.chlIndex - oldest.chlIndex;
+  const trend  = delta > 0.03 ? 'CONCENTRATING' : delta < -0.03 ? 'DISPERSING' : 'STABLE';
+  const pct    = Math.abs(Math.round(delta/oldest.chlIndex*100));
+
+  chlTrend = { snapshots, trend, delta, pct };
+
+  const trendStr = snapshots.map(s=>`${s.date}: index=${s.chlIndex}`).join(', ');
+  return `CHLOROPHYLL TREND (${snapshots.length} days): ${trend} ${pct}% over ${snapshots.length-1} observations. ${trendStr}. ${
+    trend==='CONCENTRATING' ? 'Bait is actively aggregating — fish are moving in.' :
+    trend==='DISPERSING'    ? 'Bait is spreading out — fish may be scattered.' :
+    'Bait concentration holding steady.'
+  }`;
+}
+
 function drawSatellite(){
   const W=satCvs.width, H=satCvs.height;
   satCtx.clearRect(0,0,W,H);
@@ -1496,11 +1590,16 @@ async function runAnalysis(){
   document.getElementById('aibody').innerHTML=`<div style="padding:14px">
     <div class="ldstep"><div class="spin"></div>Reading satellite imagery layers...</div>
     <div class="ldb"><div class="ldf"></div></div>
-    <div class="ldstep"><div class="spin"></div>Processing live current vectors...</div>
+    <div class="ldstep"><div class="spin"></div>Analyzing 7-day chlorophyll trend...</div>
     <div class="ldb"><div class="ldf" style="animation-delay:.5s"></div></div>
-    <div class="ldstep"><div class="spin"></div>Claude identifying hotspots...</div>
+    <div class="ldstep"><div class="spin"></div>Processing live current vectors...</div>
     <div class="ldb"><div class="ldf" style="animation-delay:1s"></div></div>
+    <div class="ldstep"><div class="spin"></div>Claude identifying hotspots...</div>
+    <div class="ldb"><div class="ldf" style="animation-delay:1.5s"></div></div>
   </div>`;
+
+  // Fetch multi-day chlorophyll trend in parallel with other setup
+  const chlTrendPromise = fetchChlTrend();
 
   // API key from localStorage
 
@@ -1527,6 +1626,9 @@ async function runAnalysis(){
 
   const month=['January','February','March','April','May','June','July','August','September','October','November','December'][new Date().getMonth()];
   
+  // Await chlorophyll trend (was started earlier in parallel)
+  const chlTrendText = await chlTrendPromise;
+  
   // Build species context
   const targetSpecies = SPECIES.filter(s=>selectedSpecies.has(s.id));
   const speciesContext = targetSpecies.length > 0
@@ -1543,7 +1645,7 @@ ${satContext}\n\n${speciesContext}
 LIVE OCEAN CURRENTS:
 ${curSummary}
 
-${eddyContext}
+${eddyContext}\n\nCHLOROPHYLL MULTI-DAY TREND:\n${chlTrendText}
 
 DEPTH: Continental shelf averages 3-8mi to 30ft, 8-15mi to 100ft, 15-25mi to 200ft, 25-40mi to 1000ft depending on location. Shelf break varies: narrow off NC/VA (~20mi), wider off FL (~40mi). Month: ${month}.
 
@@ -1577,6 +1679,9 @@ function renderResults(data){
 
   // Check which satellite layers loaded
   const satInfo=Object.entries(satCache).filter(([k,v])=>v.status==='live'&&satLayers[k]).map(([k])=>({chl:'CHL',sst:'SST',tc:'TRUE COLOR'}[k])).join(' · ')||'No satellite';
+  const trendBadge = chlTrend ? 
+    `<div style="font-family:'Space Mono';font-size:8px;background:#ffffff06;border:1px solid ${chlTrend.trend==='CONCENTRATING'?'var(--bait)':chlTrend.trend==='DISPERSING'?'var(--hot)':'var(--border)'};border-radius:3px;padding:3px 7px;color:${chlTrend.trend==='CONCENTRATING'?'var(--bait)':chlTrend.trend==='DISPERSING'?'var(--hot)':'var(--muted)'}">🦠 BAIT ${chlTrend.trend} ${chlTrend.pct}% / 7d</div>` 
+    : '';
 
   let html=`<div class="aiov">
     <div class="rrow">
@@ -1588,6 +1693,7 @@ function renderResults(data){
       <div style="font-family:'Space Mono';font-size:8px;background:#ffffff06;border:1px solid var(--border);border-radius:3px;padding:3px 7px;color:var(--cold)">⬆ ${data.avg_current_kt||'—'}kt</div>
       <div style="font-family:'Space Mono';font-size:8px;background:#ffffff06;border:1px solid var(--border);border-radius:3px;padding:3px 7px;color:var(--cold)">${data.dominant_flow||'—'} flow</div>
       <div style="font-family:'Space Mono';font-size:8px;background:#ffffff06;border:1px solid var(--border);border-radius:3px;padding:3px 7px;color:var(--bait)">🛰 ${satInfo}</div>
+      ${trendBadge}
     </div>
   </div>
   <div class="shd">🎯 Hotspot Analysis</div>`;
