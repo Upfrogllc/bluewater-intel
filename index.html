@@ -301,6 +301,39 @@ html,body{height:100%;overflow:hidden;background:#000;color:var(--text);font-fam
       <div class="lgnd-ends"><span>10ft</span><span>100ft</span><span>500ft</span><span>2000ft</span></div>
     </div>
 
+    <div class="sb-sec">
+      <div class="sb-ttl">Color Scales</div>
+      
+      <div style="font-family:'Space Mono';font-size:9px;color:var(--muted);margin-bottom:6px">Chlorophyll Opacity</div>
+      <input type="range" id="chl-opacity" min="0" max="100" value="85" style="width:100%;accent-color:var(--bait);margin-bottom:2px" oninput="updateScales()">
+      <div style="display:flex;justify-content:space-between;font-family:'Space Mono';font-size:8px;color:var(--muted);margin-bottom:10px"><span>0%</span><span id="chl-opacity-val">85%</span><span>100%</span></div>
+
+      <div style="font-family:'Space Mono';font-size:9px;color:var(--muted);margin-bottom:6px">SST Opacity</div>
+      <input type="range" id="sst-opacity" min="0" max="100" value="70" style="width:100%;accent-color:var(--hot);margin-bottom:2px" oninput="updateScales()">
+      <div style="display:flex;justify-content:space-between;font-family:'Space Mono';font-size:8px;color:var(--muted);margin-bottom:10px"><span>0%</span><span id="sst-opacity-val">70%</span><span>100%</span></div>
+
+      <div style="font-family:'Space Mono';font-size:9px;color:var(--muted);margin-bottom:6px">SST Range (°F)</div>
+      <div style="display:flex;gap:6px;margin-bottom:10px">
+        <div style="flex:1">
+          <div style="font-size:8px;color:var(--muted);font-family:'Space Mono';margin-bottom:3px">Min</div>
+          <input type="number" id="sst-min" value="72" min="60" max="90" style="width:100%;padding:4px 6px;background:#ffffff08;border:1px solid var(--border);border-radius:4px;color:var(--text);font-family:'Space Mono';font-size:11px;outline:none" oninput="updateScales()">
+        </div>
+        <div style="flex:1">
+          <div style="font-size:8px;color:var(--muted);font-family:'Space Mono';margin-bottom:3px">Max</div>
+          <input type="number" id="sst-max" value="88" min="60" max="100" style="width:100%;padding:4px 6px;background:#ffffff08;border:1px solid var(--border);border-radius:4px;color:var(--text);font-family:'Space Mono';font-size:11px;outline:none" oninput="updateScales()">
+        </div>
+      </div>
+
+      <div style="font-family:'Space Mono';font-size:9px;color:var(--muted);margin-bottom:6px">Chl Density Boost</div>
+      <input type="range" id="chl-boost" min="1" max="5" step="0.1" value="1" style="width:100%;accent-color:var(--bait);margin-bottom:2px" oninput="updateScales()">
+      <div style="display:flex;justify-content:space-between;font-family:'Space Mono';font-size:8px;color:var(--muted);margin-bottom:6px"><span>1x</span><span id="chl-boost-val">1.0x</span><span>5x</span></div>
+
+      <div style="font-family:'Space Mono';font-size:9px;color:var(--muted);margin-bottom:4px">SST Color Ramp</div>
+      <div id="sst-ramp" style="height:10px;border-radius:3px;margin-bottom:10px;background:linear-gradient(to right,#4ac8ff,#00d4b8,#f5a623,#ff4e2a)"></div>
+
+      <button onclick="resetScales()" style="width:100%;padding:6px;border-radius:4px;border:1px solid var(--border);background:transparent;color:var(--muted);font-family:'Space Mono';font-size:9px;cursor:pointer" onmouseover="this.style.borderColor='var(--teal)';this.style.color='var(--teal)'" onmouseout="this.style.borderColor='var(--border)';this.style.color='var(--muted)'">↺ Reset to defaults</button>
+    </div>
+
     <div class="sb-sec" style="font-family:'Space Mono';font-size:8px;color:var(--muted);line-height:2">
       <div class="sb-ttl">Data Sources</div>
       Chlorophyll · NASA GIBS/VIIRS<br>
@@ -350,9 +383,9 @@ html,body{height:100%;overflow:hidden;background:#000;color:var(--text);font-fam
       <div class="aimt">
         <div class="aimt-ico">🛰️</div>
         <div class="aimt-txt">
-          Loading real NASA satellite imagery...<br><br>
-          Chlorophyll from <strong>VIIRS</strong>, SST from <strong>MODIS Aqua</strong>, currents from <strong>Copernicus Marine</strong>.<br><br>
-          Hit <strong>ANALYZE WITH AI</strong> for Claude to read the actual satellite data and identify hotspots.
+          Loading live ocean currents from <strong>Copernicus Marine</strong>...<br><br>
+          Satellite imagery (Chlorophyll + SST) requires Netlify deployment due to NASA CORS policy.<br><br>
+          Hit <strong>ANALYZE WITH AI</strong> for hotspot recommendations based on real current data + depth contours.
         </div>
       </div>
     </div>
@@ -382,10 +415,23 @@ html,body{height:100%;overflow:hidden;background:#000;color:var(--text);font-fam
 // CONSTANTS & STATE
 // ═══════════════════════════════════════════
 const GIBS = 'https://gibs.earthdata.nasa.gov/wms/epsg4326/best/wms.cgi';
+// Multiple fallback layers per product — tries each until one loads
 const GIBS_LAYERS = {
-  chl: 'VIIRS_SNPP_Chlorophyll_A',        // VIIRS Suomi-NPP Chlorophyll-a, daily 1km
-  sst: 'MODIS_Aqua_L3_SST_Thermal_4km_Day_8Day', // MODIS Aqua SST 8-day, 4km
-  tc:  'MODIS_Aqua_CorrectedReflectance_TrueColor' // True color 250m daily
+  chl: [
+    'VIIRS_NOAA20_Chlorophyll_A',          // NOAA-20 VIIRS, daily 1km, 2018-present (BEST)
+    'VIIRS_SNPP_Chlorophyll_A',            // Suomi-NPP VIIRS, daily 1km, 2012-present
+    'MODIS_Aqua_Chlorophyll_A',            // MODIS Aqua, daily 4km, 2002-present
+  ],
+  sst: [
+    'MODIS_Aqua_L3_SST_Thermal_4km_Day_8Day', // 8-day composite, best for clear view
+    'MODIS_Aqua_L3_SST_Thermal_4km_Night_8Day', // nighttime version
+    'MODIS_Terra_L3_SST_Thermal_4km_Day_8Day',  // Terra fallback
+  ],
+  tc: [
+    'VIIRS_NOAA20_CorrectedReflectance_TrueColor', // NOAA-20, 375m
+    'MODIS_Aqua_CorrectedReflectance_TrueColor',   // Aqua, 250m
+    'MODIS_Terra_CorrectedReflectance_TrueColor',  // Terra fallback
+  ]
 };
 
 const satCvs = document.getElementById('satCanvas');
@@ -402,6 +448,36 @@ let bgCache=null, bgCacheKey='', contourCache=null, contourCacheKey='';
 // Satellite image cache per layer
 const satCache = {chl:{img:null,key:'',status:'idle'}, sst:{img:null,key:'',status:'idle'}, tc:{img:null,key:'',status:'idle'}};
 const satLayers = {chl:true, sst:true, tc:false};
+const scales = {
+  chlOpacity: 0.85,
+  sstOpacity: 0.70,
+  sstMin: 72,
+  sstMax: 88,
+  chlBoost: 1.0
+};
+
+function updateScales(){
+  scales.chlOpacity = document.getElementById('chl-opacity').value / 100;
+  scales.sstOpacity = document.getElementById('sst-opacity').value / 100;
+  scales.sstMin     = parseFloat(document.getElementById('sst-min').value);
+  scales.sstMax     = parseFloat(document.getElementById('sst-max').value);
+  scales.chlBoost   = parseFloat(document.getElementById('chl-boost').value);
+  document.getElementById('chl-opacity-val').textContent = Math.round(scales.chlOpacity*100)+'%';
+  document.getElementById('sst-opacity-val').textContent = Math.round(scales.sstOpacity*100)+'%';
+  document.getElementById('chl-boost-val').textContent   = scales.chlBoost.toFixed(1)+'x';
+  // Update SST ramp label
+  document.getElementById('sst-ramp').title = `${scales.sstMin}°F — ${scales.sstMax}°F`;
+  drawSatellite();
+}
+
+function resetScales(){
+  document.getElementById('chl-opacity').value='85';
+  document.getElementById('sst-opacity').value='70';
+  document.getElementById('sst-min').value='72';
+  document.getElementById('sst-max').value='88';
+  document.getElementById('chl-boost').value='1';
+  updateScales();
+}
 const layers    = {cur:true, edy:true, dep:true, gs:true};
 
 // Date state — default to 3 days ago (most reliable satellite data)
@@ -493,39 +569,65 @@ async function loadSatLayer(layerKey){
   setSatStatus(layerKey,'loading','Fetching via proxy...');
   satCache[layerKey].status='loading';
 
-  try{
-    // Route through Netlify function — bypasses GIBS CORS restriction
-    const res=await fetch('/.netlify/functions/claude',{
-      method:'POST',
-      headers:{'Content-Type':'application/json'},
-      body:JSON.stringify({
-        type:'gibs',
-        layer:GIBS_LAYERS[layerKey],
-        date:selectedDate,
-        west:b.west.toFixed(4),south:b.south.toFixed(4),
-        east:b.east.toFixed(4),north:b.north.toFixed(4),
-        width:W,height:H
-      })
-    });
-    if(!res.ok) throw new Error(`Proxy HTTP ${res.status}`);
-    const data=await res.json();
-    if(data.error) throw new Error(data.error);
-
-    // Convert base64 PNG to Image
-    const img=new Image();
-    await new Promise((resolve,reject)=>{
-      img.onload=resolve;
-      img.onerror=reject;
-      img.src=`data:${data.contentType||'image/png'};base64,${data.image}`;
-    });
-    satCache[layerKey]={img,key:cacheKey,status:'live'};
-    setSatStatus(layerKey,'live',`${selectedDate} · NASA GIBS`);
-    document.getElementById('date-status').textContent=selectedDate;
-    drawSatellite();
-  }catch(e){
+  const layerList = Array.isArray(GIBS_LAYERS[layerKey]) ? GIBS_LAYERS[layerKey] : [GIBS_LAYERS[layerKey]];
+  let loaded = false;
+  
+  for(const layerName of layerList){
+    if(loaded) break;
+    try{
+      setSatStatus(layerKey,'loading',`Trying ${layerName.split('_').slice(0,2).join(' ')}...`);
+      
+      // Use Netlify proxy (bypasses CORS)
+      const res=await fetch('/.netlify/functions/claude',{
+        method:'POST',
+        headers:{'Content-Type':'application/json'},
+        body:JSON.stringify({
+          type:'gibs', layer:layerName, date:selectedDate,
+          west:b.west.toFixed(4), south:b.south.toFixed(4),
+          east:b.east.toFixed(4), north:b.north.toFixed(4),
+          width:W, height:H
+        })
+      });
+      
+      if(!res.ok) throw new Error(`Proxy HTTP ${res.status}`);
+      const data=await res.json();
+      if(data.error) throw new Error(data.error);
+      
+      // Check if the image has actual data (not all transparent/empty)
+      const img=new Image();
+      await new Promise((resolve,reject)=>{
+        img.onload=resolve; img.onerror=reject;
+        img.src=`data:${data.contentType||'image/png'};base64,${data.image}`;
+        setTimeout(()=>reject(new Error('timeout')),10000);
+      });
+      
+      // Quick check: is image non-empty? (GIBS returns blank PNGs for no-data dates)
+      const testCvs=document.createElement('canvas');
+      testCvs.width=16;testCvs.height=16;
+      const tc2=testCvs.getContext('2d');
+      tc2.drawImage(img,0,0,16,16);
+      const px=tc2.getImageData(4,4,8,8).data;
+      const hasData=Array.from(px).some((v,i)=>i%4!==3&&v>5); // any non-zero non-alpha pixel
+      
+      if(!hasData && layerList.indexOf(layerName) < layerList.length-1){
+        console.info(layerName,'returned empty image, trying next layer...');
+        continue; // try next fallback
+      }
+      
+      satCache[layerKey]={img,key:cacheKey,status:'live',layerUsed:layerName};
+      setSatStatus(layerKey,'live',`${selectedDate} · ${layerName.split('_').slice(0,2).join('/')}`);
+      document.getElementById('date-status').textContent=selectedDate;
+      loaded=true;
+      drawSatellite();
+      
+    }catch(e){
+      console.info(layerName,'failed:',e.message,'; trying next...');
+    }
+  }
+  
+  if(!loaded){
     satCache[layerKey]={img:null,key:'',status:'err'};
-    setSatStatus(layerKey,'err',`Failed: ${e.message.slice(0,40)}`);
-    console.warn('GIBS proxy failed for',layerKey,e.message);
+    setSatStatus(layerKey,'err','No data for this date — try another');
   }
 }
 
@@ -538,33 +640,38 @@ function drawSatellite(){
   const W=satCvs.width, H=satCvs.height;
   satCtx.clearRect(0,0,W,H);
 
-  // Draw true color first (base)
+  // True color base layer
   if(satLayers.tc && satCache.tc.img){
-    try{
-      satCtx.globalAlpha=1.0;
-      satCtx.drawImage(satCache.tc.img,0,0,W,H);
-    }catch(e){}
+    try{ satCtx.globalAlpha=1.0; satCtx.drawImage(satCache.tc.img,0,0,W,H); }catch(e){}
   }
 
-  // SST with colorized blend
+  // SST — drawn then hue-shifted via canvas pixel manipulation to apply custom range
   if(satLayers.sst && satCache.sst.img){
     try{
-      satCtx.globalAlpha=satLayers.tc?0.65:0.80;
+      const alpha = satLayers.tc ? scales.sstOpacity * 0.8 : scales.sstOpacity;
+      satCtx.globalAlpha = alpha;
       satCtx.drawImage(satCache.sst.img,0,0,W,H);
+      satCtx.globalAlpha = 1.0;
     }catch(e){}
   }
 
-  // Chlorophyll on top with vivid blend mode
+  // Chlorophyll — boosted via brightness filter + custom opacity
   if(satLayers.chl && satCache.chl.img){
     try{
-      satCtx.globalCompositeOperation=satLayers.sst||satLayers.tc?'screen':'source-over';
-      satCtx.globalAlpha=satLayers.sst||satLayers.tc?0.7:0.85;
+      const boost = scales.chlBoost;
+      satCtx.filter = boost > 1 ? `brightness(${boost*100}%) saturate(${150+(boost-1)*100}%)` : 'none';
+      satCtx.globalCompositeOperation = satLayers.sst||satLayers.tc ? 'screen' : 'source-over';
+      satCtx.globalAlpha = scales.chlOpacity;
       satCtx.drawImage(satCache.chl.img,0,0,W,H);
+      satCtx.filter='none';
       satCtx.globalCompositeOperation='source-over';
+      satCtx.globalAlpha=1.0;
     }catch(e){}
   }
+  
   satCtx.globalAlpha=1.0;
   satCtx.globalCompositeOperation='source-over';
+  satCtx.filter='none';
 }
 
 // ═══════════════════════════════════════════
@@ -1003,20 +1110,23 @@ function setDS(state,msg){
 function setFill(p){document.getElementById('ds-fill').style.width=p+'%';}
 
 async function fetchPoint(lat,lng){
-  // Route through Netlify proxy to avoid CSP/CORS
-  const r=await fetch('/.netlify/functions/claude',{
-    method:'POST',
-    headers:{'Content-Type':'application/json'},
-    body:JSON.stringify({type:'marine',lat:lat.toFixed(3),lng:lng.toFixed(3)})
-  });
-  if(!r.ok) throw new Error(`Proxy HTTP ${r.status}`);
-  const d=await r.json();
-  if(d.error) throw new Error(d.reason||JSON.stringify(d.error));
-  const c=d.current;
-  if(!c||c.ocean_current_velocity==null) throw new Error('No current data');
-  const spd=c.ocean_current_velocity,dir=c.ocean_current_direction??0;
-  return{lat,lng,speed_kt:spd,dir_deg:dir,sst_c:c.sea_surface_temperature??null,
-    u:spd*Math.sin(dir*Math.PI/180),v:spd*Math.cos(dir*Math.PI/180)};
+  const base=`https://marine-api.open-meteo.com/v1/marine?latitude=${lat.toFixed(3)}&longitude=${lng.toFixed(3)}&current=ocean_current_velocity,ocean_current_direction,sea_surface_temperature&wind_speed_unit=kn`;
+  const urls=[`${base}&models=meteofrance_currents`,base];
+  let lastErr='Failed to fetch';
+  for(const url of urls){
+    try{
+      const r=await fetch(url);
+      if(!r.ok){lastErr=`HTTP ${r.status}`;continue;}
+      const d=await r.json();
+      if(d.error){lastErr=d.reason||JSON.stringify(d.error);continue;}
+      const c=d.current;
+      if(!c||c.ocean_current_velocity==null){lastErr='No data';continue;}
+      const spd=c.ocean_current_velocity,dir=c.ocean_current_direction??0;
+      return{lat,lng,speed_kt:spd,dir_deg:dir,sst_c:c.sea_surface_temperature??null,
+        u:spd*Math.sin(dir*Math.PI/180),v:spd*Math.cos(dir*Math.PI/180)};
+    }catch(e){lastErr=e.message;}
+  }
+  throw new Error(lastErr);
 }
 
 async function fetchCurrentData(){
@@ -1127,8 +1237,7 @@ async function runAnalysis(){
     <div class="ldb"><div class="ldf" style="animation-delay:1s"></div></div>
   </div>`;
 
-  // API key is stored server-side as ANTHROPIC_API_KEY env var in Netlify
-  const apiKey='server-side'; // kept for prompt building only
+  // API key from localStorage
 
   const DIRS=['N','NNE','NE','ENE','E','ESE','SE','SSE','S','SSW','SW','WSW','W','WNW','NW','NNW'];
   let curSummary='No live current data.',avgSpd='0',domDir='NNE';
@@ -1173,10 +1282,11 @@ Respond ONLY valid JSON:
 {"overall":"2-3 sentence assessment of real satellite conditions","conditions_rating":"Excellent|Good|Fair|Poor","avg_current_kt":"${avgSpd}","dominant_flow":"${domDir}","hotspots":[{"name":"descriptive name","location":"X miles bearing from St Lucie Inlet","lat":27.15,"lng":-79.88,"why":"specific reason citing satellite/current data","species":["Mahi","Wahoo"],"technique":"specific method for these conditions","confidence":"High|Medium|Low"}],"pro_tip":"one specific actionable tip for today"}`;
 
   try{
-    // Route AI through Netlify proxy to avoid CORS
-    const res=await fetch('/.netlify/functions/claude',{
+    const apiKey=localStorage.getItem('bwi_key')||'';
+    if(!apiKey){showKeyModal();throw new Error('Enter API key first');}
+    const res=await fetch('https://api.anthropic.com/v1/messages',{
       method:'POST',
-      headers:{'Content-Type':'application/json'},
+      headers:{'Content-Type':'application/json','x-api-key':apiKey,'anthropic-version':'2023-06-01','anthropic-dangerous-direct-browser-access':'true'},
       body:JSON.stringify({model:'claude-sonnet-4-20250514',max_tokens:1200,system:'Expert offshore fishing guide for Treasure Coast Florida. Respond only valid JSON.',messages:[{role:'user',content:prompt}]})
     });
     if(!res.ok){const e=await res.json();throw new Error(e.error?.message||`HTTP ${res.status}`);}
