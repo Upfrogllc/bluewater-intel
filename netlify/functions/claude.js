@@ -97,29 +97,62 @@ exports.handler = async (event) => {
       return { statusCode: 502, headers: CORS, body: JSON.stringify({ error: 'All NOAA chart endpoints failed' }) };
     }
 
-    // GIBS — proxy NASA satellite imagery with date fallback
+    // GIBS — proxy NASA satellite imagery, EXACT DATE ONLY
+    // No silent fallback to old dates — fishing decisions require current data
     if (type === 'gibs') {
       const { layer, date, west, south, east, north, width, height } = payload;
       const base = `https://gibs.earthdata.nasa.gov/wms/epsg4326/best/wms.cgi?SERVICE=WMS&VERSION=1.1.1&REQUEST=GetMap&LAYERS=${layer}&STYLES=&FORMAT=image/png&TRANSPARENT=true&SRS=EPSG:4326&WIDTH=${width}&HEIGHT=${height}&BBOX=${west},${south},${east},${north}`;
 
-      // Try requested date first, then step back up to 12 days to find data
-      const startDate = new Date(date + 'T12:00:00Z');
-      for (let dayOffset = 0; dayOffset <= 12; dayOffset++) {
-        const tryDate = new Date(startDate);
-        tryDate.setDate(tryDate.getDate() - dayOffset);
-        const dateStr = tryDate.toISOString().split('T')[0];
-        const url = `${base}&TIME=${dateStr}`;
+      // PNG magic bytes check: 89 50 4E 47
+      function isValidPNG(buf) {
+        if (buf.byteLength < 200) return false;
+        const b = new Uint8Array(buf.slice(0, 4));
+        return b[0]===0x89 && b[1]===0x50 && b[2]===0x4E && b[3]===0x47;
+      }
+      function isXMLError(buf) {
+        if (buf.byteLength < 10) return true;
+        const t = Buffer.from(buf.slice(0, 80)).toString('utf8');
+        return t.includes('<?xml') || t.includes('ExceptionReport') || t.includes('<Service');
+      }
+
+      // Try the requested date. If satellite hasn't processed today yet,
+      // also try yesterday — that's the maximum we'll silently try (1 day tolerance
+      // for processing lag only, not stale data fallback).
+      // The date picker defaults to 1 day ago anyway, so this handles edge cases
+      // where the user manually selects today before the overpass is processed.
+      const tryDates = [date];
+      const reqDate = new Date(date + 'T12:00:00Z');
+      const yesterday = new Date(reqDate); yesterday.setDate(yesterday.getDate() - 1);
+      tryDates.push(yesterday.toISOString().split('T')[0]);
+
+      for (const tryDate of tryDates) {
+        const url = `${base}&TIME=${tryDate}`;
         try {
           const res = await fetch(url, { headers: { 'User-Agent': 'BlueWaterIntel/1.0' } });
           if (!res.ok) continue;
           const buf = await res.arrayBuffer();
-          // PNG files under 1KB are blank/transparent — skip them
-          if (buf.byteLength < 1024) continue;
-          const b64 = Buffer.from(buf).toString('base64');
-          return { statusCode: 200, headers: CORS, body: JSON.stringify({ image: b64, contentType: 'image/png', date: dateStr }) };
+          if (isXMLError(buf)) {
+            return { statusCode: 400, headers: CORS, body: JSON.stringify({ error: `Layer not found: ${layer}` }) };
+          }
+          if (!isValidPNG(buf)) continue;
+          // Flag if we had to use yesterday so UI can inform the user
+          const usedYesterday = tryDate !== date;
+          return {
+            statusCode: 200, headers: CORS,
+            body: JSON.stringify({
+              image: Buffer.from(buf).toString('base64'),
+              contentType: 'image/png',
+              date: tryDate,
+              lag: usedYesterday ? "~24hr processing lag — yesterday pass" : null
+            })
+          };
         } catch(e) { continue; }
       }
-      return { statusCode: 404, headers: CORS, body: JSON.stringify({ error: 'No data found in last 12 days' }) };
+      // No data for requested date — tell the user clearly
+      return {
+        statusCode: 404, headers: CORS,
+        body: JSON.stringify({ error: `No satellite pass for ${date} — cloud cover or not yet processed. Try an earlier date.` })
+      };
     }
 
     // CMEMS MLD — proxy Copernicus Marine Mixed Layer Depth WMS
