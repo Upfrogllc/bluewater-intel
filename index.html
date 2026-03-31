@@ -1004,31 +1004,73 @@ async function loadSatLayer(layerKey){
   const b=getViewBounds();
   const W=satCvs.width, H=satCvs.height;
   const cacheKey=`${layerKey}_${selectedDate}_${b.west.toFixed(3)}_${b.south.toFixed(3)}_${b.east.toFixed(3)}_${b.north.toFixed(3)}_${W}_${H}`;
-  if(satCache[layerKey].key===cacheKey && satCache[layerKey].img) return; // already loaded
+  if(satCache[layerKey].key===cacheKey && satCache[layerKey].img) return;
 
+  // Determine source type for CHL — SST/TC always use GIBS
+  const src = layerKey==='chl' ? CHL_SOURCES[activeChlSrc] : null;
+  const isCoastWatch = src && src.type==='coastwatch';
+
+  if(isCoastWatch){
+    // ── CoastWatch ERDDAP path (S-3A / S-3B 300m) ──────────────────
+    setSatStatus(layerKey,'loading',`${src.label} — fetching 300m...`);
+    satCache[layerKey].status='loading';
+    try{
+      const res = await fetch('/.netlify/functions/claude',{
+        method:'POST', headers:{'Content-Type':'application/json'},
+        body: JSON.stringify({
+          type:'coastwatch',
+          dataset: src.dataset,
+          variable: src.variable,
+          date: selectedDate,
+          west: b.west.toFixed(4), south: b.south.toFixed(4),
+          east: b.east.toFixed(4), north: b.north.toFixed(4),
+          width: Math.round(W), height: Math.round(H)
+        })
+      });
+      if(!res.ok) throw new Error(`Proxy ${res.status}`);
+      const data = await res.json();
+      if(data.error) throw new Error(data.error);
+      const img = new Image();
+      await new Promise((resolve,reject)=>{
+        img.onload=resolve; img.onerror=reject;
+        img.src=`data:image/png;base64,${data.image}`;
+        setTimeout(()=>reject(new Error('timeout')),20000);
+      });
+      satCache[layerKey]={img, key:cacheKey, status:'live'};
+      const lagNote = data.lag ? ' ⚠ lag' : ' ✓';
+      setSatStatus(layerKey,'live',`${data.date} · ${src.label}${lagNote}`);
+      const note=document.getElementById('chl-src-note');
+      if(note) note.textContent = data.lag ? '⚠ Processing lag — showing previous pass' : src.note||'';
+      document.getElementById('date-status').textContent=data.date;
+    }catch(e){
+      satCache[layerKey]={img:null,key:'',status:'err'};
+      setSatStatus(layerKey,'err',`${src.label}: ${e.message.slice(0,45)}`);
+      console.warn('CoastWatch load failed:',e.message);
+    }
+    return;
+  }
+
+  // ── GIBS WMS path (all other sources) ──────────────────────────
   setSatStatus(layerKey,'loading','Fetching from NASA GIBS...');
   satCache[layerKey].status='loading';
-
   const layerName=GIBS_LAYERS[layerKey];
+  if(!layerName){
+    setSatStatus(layerKey,'err','No layer configured'); return;
+  }
   const url=`${GIBS}?SERVICE=WMS&VERSION=1.1.1&REQUEST=GetMap&LAYERS=${layerName}&STYLES=&FORMAT=image/png&TRANSPARENT=true&SRS=EPSG:4326&WIDTH=${Math.round(W)}&HEIGHT=${Math.round(H)}&BBOX=${b.west},${b.south},${b.east},${b.north}&TIME=${selectedDate}`;
 
   try{
     const img=new Image();
     img.crossOrigin='anonymous';
     await new Promise((resolve,reject)=>{
-      img.onload=resolve;
-      img.onerror=reject;
-      img.src=url;
+      img.onload=resolve; img.onerror=reject; img.src=url;
     });
     satCache[layerKey]={img,key:cacheKey,status:'live'};
     setSatStatus(layerKey,'live',`${selectedDate} · NASA GIBS`);
     document.getElementById('date-status').textContent=selectedDate;
   }catch(e){
-    // GIBS blocks direct browser fetch due to CORS — use img element trick
-    // Fallback: try loading as plain img (no CORS headers needed for display)
     try{
       const img=new Image();
-      // Don't set crossOrigin — allows CORS-blocked images to display (tainted canvas but visible)
       await new Promise((resolve,reject)=>{
         img.onload=resolve;
         img.onerror=(e2)=>reject(e2);
