@@ -169,12 +169,14 @@ exports.handler = async (event) => {
         return b[0]===0x89 && b[1]===0x50 && b[2]===0x4E && b[3]===0x47;
       }
 
-      // CoastWatch ERDDAP WMS uses time in ISO format as the DIM_time parameter
-      // Try requested date then yesterday (processing lag only)
+      // CoastWatch ERDDAP WMS — S-3A/S-3B can have 1-3 day processing lag
+      // Try requested date then up to 5 days back
       const tryDates = [date];
-      const d = new Date(date + 'T12:00:00Z');
-      d.setDate(d.getDate() - 1);
-      tryDates.push(d.toISOString().split('T')[0]);
+      for(let back=1; back<=5; back++){
+        const d = new Date(date + 'T12:00:00Z');
+        d.setDate(d.getDate() - back);
+        tryDates.push(d.toISOString().split('T')[0]);
+      }
 
       for (const tryDate of tryDates) {
         const timeStr = tryDate + 'T12:00:00Z';
