@@ -97,15 +97,29 @@ exports.handler = async (event) => {
       return { statusCode: 502, headers: CORS, body: JSON.stringify({ error: 'All NOAA chart endpoints failed' }) };
     }
 
-    // GIBS — proxy NASA satellite imagery
+    // GIBS — proxy NASA satellite imagery with date fallback
     if (type === 'gibs') {
       const { layer, date, west, south, east, north, width, height } = payload;
-      const url = `https://gibs.earthdata.nasa.gov/wms/epsg4326/best/wms.cgi?SERVICE=WMS&VERSION=1.1.1&REQUEST=GetMap&LAYERS=${layer}&STYLES=&FORMAT=image/png&TRANSPARENT=true&SRS=EPSG:4326&WIDTH=${width}&HEIGHT=${height}&BBOX=${west},${south},${east},${north}&TIME=${date}`;
-      const res = await fetch(url, { headers: { 'User-Agent': 'BlueWaterIntel/1.0' } });
-      if (!res.ok) return { statusCode: res.status, headers: CORS, body: JSON.stringify({ error: `GIBS ${res.status}` }) };
-      const buf = await res.arrayBuffer();
-      const b64 = Buffer.from(buf).toString('base64');
-      return { statusCode: 200, headers: CORS, body: JSON.stringify({ image: b64, contentType: res.headers.get('content-type') || 'image/png' }) };
+      const base = `https://gibs.earthdata.nasa.gov/wms/epsg4326/best/wms.cgi?SERVICE=WMS&VERSION=1.1.1&REQUEST=GetMap&LAYERS=${layer}&STYLES=&FORMAT=image/png&TRANSPARENT=true&SRS=EPSG:4326&WIDTH=${width}&HEIGHT=${height}&BBOX=${west},${south},${east},${north}`;
+
+      // Try requested date first, then step back up to 12 days to find data
+      const startDate = new Date(date + 'T12:00:00Z');
+      for (let dayOffset = 0; dayOffset <= 12; dayOffset++) {
+        const tryDate = new Date(startDate);
+        tryDate.setDate(tryDate.getDate() - dayOffset);
+        const dateStr = tryDate.toISOString().split('T')[0];
+        const url = `${base}&TIME=${dateStr}`;
+        try {
+          const res = await fetch(url, { headers: { 'User-Agent': 'BlueWaterIntel/1.0' } });
+          if (!res.ok) continue;
+          const buf = await res.arrayBuffer();
+          // PNG files under 1KB are blank/transparent — skip them
+          if (buf.byteLength < 1024) continue;
+          const b64 = Buffer.from(buf).toString('base64');
+          return { statusCode: 200, headers: CORS, body: JSON.stringify({ image: b64, contentType: 'image/png', date: dateStr }) };
+        } catch(e) { continue; }
+      }
+      return { statusCode: 404, headers: CORS, body: JSON.stringify({ error: 'No data found in last 12 days' }) };
     }
 
     // CMEMS MLD — proxy Copernicus Marine Mixed Layer Depth WMS
