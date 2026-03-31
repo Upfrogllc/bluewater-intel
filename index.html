@@ -265,7 +265,7 @@ html,body{height:100%;overflow:hidden;background:#000;color:var(--text);font-fam
       <div class="layer-btn" id="btn-mld" onclick="toggleLayer('mld')">
         <div class="lb-left">
           <div class="lb-dot" style="background:#cc88ff;box-shadow:0 0 5px #cc88ff66"></div>
-          <span>Thermocline Depth</span>
+          <span>SSH / Thermocline</span>
         </div>
         <span class="lb-src">HYCOM</span>
         <div class="tog" id="tog-mld"></div>
@@ -311,7 +311,7 @@ html,body{height:100%;overflow:hidden;background:#000;color:var(--text);font-fam
       <div class="lgnd-ends"><span>10ft</span><span>100ft</span><span>500ft</span><span>2000ft</span></div>
       <div style="font-family:'Space Mono';font-size:8px;color:var(--muted);margin:8px 0 4px">Thermocline Depth (MLD)</div>
       <div class="lgnd-bar" style="background:linear-gradient(to right,#ff32dc,#6464ff,#00c8c8,#00dc96)"></div>
-      <div class="lgnd-ends"><span>&lt;20m</span><span>60m</span><span>120m+</span></div>
+      <div class="lgnd-ends"><span>↑ Upwell</span><span>Neutral</span><span>Warm ↓</span></div>
     </div>
 
     <div class="sb-sec">
@@ -783,65 +783,60 @@ async function loadAllSatellite(){
 // ── HYCOM Mixed Layer Depth (thermocline proxy) ──
 async function fetchMLD(){
   const b = getViewBounds();
-  setSatStatus2('mld','loading','Fetching HYCOM MLD...');
+  setSatStatus2('mld','loading','Fetching HYCOM SSH...');
 
-  // HYCOM Global 3D dataset has mlt (mixed layer thickness)
-  // Lon is 0-360, lat is -80 to 80
-  // stride syntax: [(start):(stride):(stop)] — 6 steps ≈ 0.5° at 0.08° resolution
+  // Use sea surface height (surf_el) from Hycom_sfc_2d as thermocline proxy
+  // High SSH = warm core eddy, depressed thermocline (deep, fish at depth)
+  // Low SSH  = cold core / upwelling, raised thermocline (shallow, baitfish)
+  // This is the same signal professional fishing apps use for thermocline mapping
+  
   const west  = ((b.west  % 360) + 360) % 360;
   const east  = ((b.east  % 360) + 360) % 360;
   const south = Math.max(-79, b.south).toFixed(2);
   const north = Math.min( 79, b.north).toFixed(2);
-  const stride = 6; // ~0.5° spacing
+  const stride = 6; // ~0.5° at 0.08° grid
 
-  // Try multiple ERDDAP endpoints — ncei can be slow/down
-  const endpoints = [
-    `https://www.ncei.noaa.gov/erddap/griddap/Hycom_sfc_3d.json?mlt%5B(last)%5D%5B(0.0)%5D%5B(${south})%3A${stride}%3A(${north})%5D%5B(${west.toFixed(2)})%3A${stride}%3A(${east.toFixed(2)})%5D`,
-  ];
+  // ERDDAP griddap format: var[(time_last)][(lat_s):(stride):(lat_n)][(lon_w):(stride):(lon_e)]
+  const url = `https://www.ncei.noaa.gov/erddap/griddap/Hycom_sfc_2d.json?surf_el%5B(last)%5D%5B(${south})%3A${stride}%3A(${north})%5D%5B(${west.toFixed(2)})%3A${stride}%3A(${east.toFixed(2)})%5D`;
 
-  let lastErr = 'No endpoints succeeded';
-  for(const url of endpoints){
-    try{
-      setSatStatus2('mld','loading','Querying HYCOM ERDDAP...');
-      const res = await fetch(url, {signal: AbortSignal.timeout(20000)});
-      if(!res.ok){
-        const txt = await res.text();
-        lastErr = `HTTP ${res.status}: ${txt.slice(0,100)}`;
-        console.warn('HYCOM endpoint failed:', lastErr);
-        continue;
-      }
-      const data = await res.json();
-      const cols = data.table.columnNames;
-      const rows = data.table.rows;
-      const latIdx = cols.indexOf('latitude');
-      const lngIdx = cols.indexOf('longitude');
-      const mltIdx = cols.indexOf('mlt');
-
-      if(mltIdx < 0){ lastErr='mlt column not found in response'; continue; }
-
-      mldGrid = rows
-        .filter(r => r[mltIdx] !== null && r[mltIdx] > 0 && r[mltIdx] < 5000)
-        .map(r => ({
-          lat: r[latIdx],
-          lng: r[lngIdx] > 180 ? r[lngIdx] - 360 : r[lngIdx],
-          mld_m: r[mltIdx]
-        }));
-
-      if(!mldGrid.length){ lastErr='All MLD values null or invalid'; continue; }
-
-      setSatStatus2('mld','live',`${mldGrid.length}pts · HYCOM MLD`);
-      console.log('MLD:', mldGrid.length,'pts, range',
-        Math.min(...mldGrid.map(p=>p.mld_m)).toFixed(0)+'–'+
-        Math.max(...mldGrid.map(p=>p.mld_m)).toFixed(0)+'m');
-      return;
-    } catch(e){
-      lastErr = e.message;
-      console.warn('HYCOM fetch error:', e.message);
+  try{
+    const res = await fetch(url, {signal: AbortSignal.timeout(25000)});
+    if(!res.ok){
+      const txt = await res.text();
+      throw new Error(`HTTP ${res.status}: ${txt.slice(0,120)}`);
     }
-  }
+    const data = await res.json();
+    const cols = data.table.columnNames;
+    const rows = data.table.rows;
+    const latIdx = cols.indexOf('latitude');
+    const lngIdx = cols.indexOf('longitude');
+    const sshIdx = cols.indexOf('surf_el');
 
-  setSatStatus2('mld','err',`Failed: ${lastErr.slice(0,50)}`);
-  mldGrid = [];
+    if(sshIdx < 0) throw new Error('surf_el not found. Cols: '+cols.join(','));
+
+    // Filter out fill values (-30000) and nulls
+    const valid = rows.filter(r => r[sshIdx] !== null && r[sshIdx] > -1000);
+    if(!valid.length) throw new Error('No valid SSH values in response');
+
+    // Compute mean SSH for anomaly calculation
+    const meanSSH = valid.reduce((s,r)=>s+r[sshIdx],0)/valid.length;
+
+    mldGrid = valid.map(r => ({
+      lat: r[latIdx],
+      lng: r[lngIdx] > 180 ? r[lngIdx] - 360 : r[lngIdx],
+      mld_m: r[sshIdx],        // raw SSH in meters
+      anom: r[sshIdx] - meanSSH // SSH anomaly relative to viewport mean
+    }));
+
+    setSatStatus2('mld','live',`${mldGrid.length}pts · HYCOM SSH`);
+    const mn=Math.min(...mldGrid.map(p=>p.mld_m)).toFixed(2);
+    const mx=Math.max(...mldGrid.map(p=>p.mld_m)).toFixed(2);
+    console.log('SSH loaded:',mldGrid.length,'pts, range',mn,'–',mx,'m');
+  } catch(e){
+    setSatStatus2('mld','err',`Failed: ${e.message.slice(0,55)}`);
+    console.warn('HYCOM SSH fetch failed:', e.message);
+    mldGrid = [];
+  }
 }
 
 function setSatStatus2(layer, state, msg){
@@ -862,16 +857,18 @@ function interpMLD(lat, lng){
   return nearby.reduce((s,p) => s + p.mld_m/Math.max(0.001,p.dist), 0) / w;
 }
 
-function mldColor(mld_m){
-  // Shallow thermocline (<30m): purple/magenta — upwelling, cold, baitfish
-  // Medium (30-80m): blue-purple — transition zone
-  // Deep (>80m): dark blue — warm core, deeper fish
-  if(mld_m < 20)  return 'rgba(255, 50, 220, 0.85)';  // bright magenta = very shallow
-  if(mld_m < 40)  return 'rgba(180, 80, 255, 0.75)';  // purple
-  if(mld_m < 60)  return 'rgba(100, 100, 255, 0.65)'; // blue-purple
-  if(mld_m < 80)  return 'rgba(50, 150, 255, 0.55)';  // blue
-  if(mld_m < 120) return 'rgba(0, 200, 200, 0.45)';   // teal = warm/deep
-  return 'rgba(0, 220, 150, 0.35)';                    // green = very deep MLD
+function mldColor(pt){
+  // Color by SSH anomaly (anom) — relative to viewport mean
+  // Negative = upwelling/cold core (raised thermocline, baitfish) = blue/purple
+  // Positive = warm core eddy (depressed thermocline, pelagics) = orange/red
+  const a = pt.anom;
+  if(a < -0.20) return 'rgba(0,  80, 255, 0.85)';   // strong upwelling, blue
+  if(a < -0.10) return 'rgba(80, 160, 255, 0.75)';   // moderate upwelling
+  if(a < -0.03) return 'rgba(160,200, 255, 0.60)';   // slight low
+  if(a <  0.03) return 'rgba(255, 255, 200, 0.40)';  // neutral
+  if(a <  0.10) return 'rgba(255, 200, 80,  0.60)';  // slight high
+  if(a <  0.20) return 'rgba(255, 130, 30,  0.75)';  // warm core
+  return            'rgba(255,  40,  0,  0.88)';      // strong warm core, red
 }
 
 function drawMLD(){
@@ -888,7 +885,7 @@ function drawMLD(){
     
     // Circle size based on grid spacing
     const r = Math.max(8, (W / (BASE_DLNG/vp.scale)) * 0.06);
-    const col = mldColor(pt.mld_m);
+    const col = mldColor(pt);
     
     ctx.beginPath();
     ctx.arc(x, y, r, 0, Math.PI*2);
@@ -905,7 +902,7 @@ function drawMLD(){
       if(x<10||x>W-10||y<10||y>H-10) continue;
       ctx.fillStyle = 'rgba(255,255,255,0.9)';
       ctx.shadowColor = 'rgba(0,0,0,0.8)'; ctx.shadowBlur=2;
-      ctx.fillText(Math.round(pt.mld_m)+'m', x, y+3);
+      ctx.fillText((pt.anom>=0?'+':'')+pt.anom.toFixed(2)+'m', x, y+3);
       ctx.shadowBlur=0;
     }
     ctx.textAlign = 'left';
@@ -915,22 +912,23 @@ function drawMLD(){
   ctx.font = 'bold 9px "Space Mono",monospace';
   ctx.fillStyle = 'rgba(255,255,255,0.9)';
   ctx.shadowColor='rgba(0,0,0,0.8)'; ctx.shadowBlur=3;
-  ctx.fillText('THERMOCLINE DEPTH (HYCOM MLD)', 10, 30);
+  ctx.fillText('SEA SURFACE HEIGHT / THERMOCLINE (HYCOM)', 10, 30);
   ctx.shadowBlur=0;
   
   const legendX=10, legendY=42, legendW=160;
   const grad=ctx.createLinearGradient(legendX,0,legendX+legendW,0);
-  grad.addColorStop(0,'rgba(255,50,220,0.9)');
-  grad.addColorStop(0.33,'rgba(100,100,255,0.9)');
-  grad.addColorStop(0.66,'rgba(0,200,200,0.9)');
-  grad.addColorStop(1,'rgba(0,220,150,0.9)');
+  grad.addColorStop(0,'rgba(0,80,255,0.9)');
+  grad.addColorStop(0.4,'rgba(160,200,255,0.9)');
+  grad.addColorStop(0.5,'rgba(255,255,200,0.9)');
+  grad.addColorStop(0.65,'rgba(255,200,80,0.9)');
+  grad.addColorStop(1,'rgba(255,40,0,0.9)');
   ctx.fillStyle=grad;
   ctx.fillRect(legendX,legendY,legendW,6);
   ctx.font='7px "Space Mono",monospace';
   ctx.fillStyle='rgba(255,255,255,0.9)';
-  ctx.fillText('<20m',legendX,legendY+16);
-  ctx.fillText('60m',legendX+legendW/2-10,legendY+16);
-  ctx.fillText('>120m',legendX+legendW-28,legendY+16);
+  ctx.fillText('↑ Upwell',legendX,legendY+16);
+  ctx.fillText('Neutral',legendX+legendW/2-14,legendY+16);
+  ctx.fillText('Warm↓',legendX+legendW-30,legendY+16);
   
   ctx.restore();
 }
