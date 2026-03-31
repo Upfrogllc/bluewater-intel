@@ -794,9 +794,15 @@ async function fetchMLD(){
   const east  = ((b.east  % 360) + 360) % 360;
   const south = Math.max(-79, b.south).toFixed(2);
   const north = Math.min( 79, b.north).toFixed(2);
-  const stride = 6; // ~0.5° at 0.08° grid
+  // Stride = 1 = full 0.08° native resolution (~6mi)
+  // Cap total points to keep response fast: viewport area / 0.08² max ~5000 pts
+  const latSpan = parseFloat(north) - parseFloat(south);
+  const lngSpan = east - west > 0 ? east - west : east + 360 - west;
+  const nativePts = (latSpan / 0.08) * (lngSpan / 0.08);
+  const stride = Math.max(1, Math.ceil(Math.sqrt(nativePts / 4000)));
+  const spacingDeg = (stride * 0.08).toFixed(2);
 
-  // ERDDAP griddap format: var[(time_last)][(lat_s):(stride):(lat_n)][(lon_w):(stride):(lon_e)]
+  setSatStatus2('mld','loading',`SSH ${spacingDeg}° grid...`);
   const url = `https://www.ncei.noaa.gov/erddap/griddap/Hycom_sfc_2d.json?surf_el%5B(last)%5D%5B(${south})%3A${stride}%3A(${north})%5D%5B(${west.toFixed(2)})%3A${stride}%3A(${east.toFixed(2)})%5D`;
 
   try{
@@ -824,9 +830,10 @@ async function fetchMLD(){
     mldGrid = valid.map(r => ({
       lat: r[latIdx],
       lng: r[lngIdx] > 180 ? r[lngIdx] - 360 : r[lngIdx],
-      mld_m: r[sshIdx],        // raw SSH in meters
-      anom: r[sshIdx] - meanSSH // SSH anomaly relative to viewport mean
+      mld_m: r[sshIdx],
+      anom: r[sshIdx] - meanSSH
     }));
+    mldGrid._stride = stride; // store for dot sizing
 
     setSatStatus2('mld','live',`${mldGrid.length}pts · HYCOM SSH`);
     const mn=Math.min(...mldGrid.map(p=>p.mld_m)).toFixed(2);
@@ -884,7 +891,8 @@ function drawMLD(){
     if(x<-20||x>W+20||y<-20||y>H+20) continue;
     
     // Circle size based on grid spacing
-    const r = Math.max(8, (W / (BASE_DLNG/vp.scale)) * 0.06);
+    const stride = mldGrid._stride || 1;
+    const r = Math.max(2, (W / (BASE_DLNG/vp.scale)) * stride * 0.04);
     const col = mldColor(pt);
     
     ctx.beginPath();
