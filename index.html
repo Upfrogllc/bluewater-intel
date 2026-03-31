@@ -212,6 +212,16 @@ html,body{height:100%;overflow:hidden;background:#000;color:var(--text);font-fam
       <div class="sat-badge idle" id="sb-sst"><div class="dot"></div><span id="sl-sst">Not loaded</span></div>
 
       <!-- True Color -->
+      <div class="layer-btn active" id="btn-noaa" onclick="toggleNOAAChart()">
+        <div class="lb-left">
+          <div class="lb-dot" style="background:#d4e8ff;box-shadow:0 0 5px #d4e8ff66"></div>
+          <span>⚓ NOAA Nautical Chart</span>
+        </div>
+        <span class="lb-src">NOAA ENC</span>
+        <div class="tog on" id="tog-noaa"></div>
+      </div>
+      <div class="sat-badge idle" id="sb-noaa"><div class="dot"></div><span id="sl-noaa">Loading...</span></div>
+
       <div class="layer-btn" id="btn-tc" onclick="toggleSat('tc')">
         <div class="lb-left">
           <div class="lb-dot" style="background:#aaddff;box-shadow:0 0 5px #aaddff66"></div>
@@ -267,10 +277,19 @@ html,body{height:100%;overflow:hidden;background:#000;color:var(--text);font-fam
           <div class="lb-dot" style="background:#cc88ff;box-shadow:0 0 5px #cc88ff66"></div>
           <span>Mixed Layer Depth</span>
         </div>
-        <span class="lb-src">HYCOM</span>
+        <span class="lb-src">CMEMS</span>
         <div class="tog" id="tog-mld"></div>
       </div>
       <div class="sat-badge idle" id="sb-mld"><div class="dot"></div><span id="sl-mld">Not loaded</span></div>
+
+      <div class="layer-btn" id="btn-fsle" onclick="toggleLayer('fsle')">
+        <div class="lb-left">
+          <div class="lb-dot" style="background:#ff9933;box-shadow:0 0 5px #ff993366"></div>
+          <span>Ocean Fronts / FSLE</span>
+        </div>
+        <span class="lb-src">Computed</span>
+        <div class="tog" id="tog-fsle"></div>
+      </div>
     </div>
 
     <div class="sb-sec">
@@ -372,6 +391,10 @@ html,body{height:100%;overflow:hidden;background:#000;color:var(--text);font-fam
       <span style="font-family:'Space Mono';font-size:8px;color:var(--muted)" id="date-status">—</span>
     </div>
 
+    <!-- REGION SELECTOR -->
+    <div id="region-bar" style="position:absolute;bottom:55px;left:50%;transform:translateX(-50%);z-index:10;display:flex;gap:4px;flex-wrap:wrap;justify-content:center;max-width:90vw;backdrop-filter:blur(8px)">
+    </div>
+
     <div id="zoom-ctrls">
       <div class="zctr" onclick="zoom(1.3)">+</div>
       <div class="zctr" onclick="zoom(0.77)">−</div>
@@ -470,8 +493,8 @@ const satCtx = satCvs.getContext('2d');
 const cvs    = document.getElementById('mapCanvas');
 const ctx    = cvs.getContext('2d');
 
-let vp = {lat:33.0, lng:-76.0, scale:0.38};
-const BASE_DLAT=9.0, BASE_DLNG=13.5;  // Full east coast view
+let vp = {lat:27.2, lng:-79.9, scale:3.2}; // Default: Port St Lucie
+const BASE_DLAT=4.5, BASE_DLNG=6.5;   // Regional view — tighter, faster
 let animT=0, drag=null, lastFrameTime=0;
 let currentGrid=[], dataFetchTime=null, hotspots=[], detectedEddies=[];
 let bgCache=null, bgCacheKey='', contourCache=null, contourCacheKey='';
@@ -479,7 +502,22 @@ let bgCache=null, bgCacheKey='', contourCache=null, contourCacheKey='';
 // Satellite image cache per layer
 const satCache = {chl:{img:null,key:'',status:'idle'}, sst:{img:null,key:'',status:'idle'}, tc:{img:null,key:'',status:'idle'}};
 const satLayers = {chl:true, sst:true, tc:false};
-let mldGrid = []; // [{lat, lng, mld_m}] from HYCOM
+let noaaChartOn = true; // NOAA nautical chart base layer
+let noaaChartCache = {img:null, key:''};
+let mldGrid = []; // [{lat, lng, mld_m}]
+let mldCacheCanvas = null; // pre-rendered offscreen canvas, only rebuilt on data change
+
+const REGIONS = [
+  {"id":"keys",       "name":"Florida Keys",      "lat":24.8,  "lng":-81.2, "scale":2.8, "emoji":"🏝️"},
+  {"id":"miami",      "name":"Miami / Palm Beach", "lat":26.0,  "lng":-79.8, "scale":3.0, "emoji":"🌴"},
+  {"id":"psl",        "name":"Port St Lucie",      "lat":27.2,  "lng":-79.9, "scale":3.2, "emoji":"⭐"},
+  {"id":"cape",       "name":"Cape Canaveral",     "lat":28.5,  "lng":-80.3, "scale":3.0, "emoji":"🚀"},
+  {"id":"jax",        "name":"Jacksonville",       "lat":30.3,  "lng":-80.8, "scale":2.8, "emoji":"🌊"},
+  {"id":"savannah",   "name":"Savannah / SC",      "lat":32.0,  "lng":-79.5, "scale":2.6, "emoji":"🦅"},
+  {"id":"hatteras",   "name":"Cape Hatteras",      "lat":35.5,  "lng":-75.5, "scale":2.8, "emoji":"🌀"},
+  {"id":"chesapeake", "name":"Chesapeake Bay",     "lat":37.0,  "lng":-75.5, "scale":2.8, "emoji":"🦀"},
+  {"id":"nj",         "name":"NJ / NY",            "lat":39.5,  "lng":-73.5, "scale":2.6, "emoji":"🗽"}
+];
 const scales = {
   chlOpacity: 0.85,
   sstOpacity: 0.70,
@@ -510,7 +548,7 @@ function resetScales(){
   document.getElementById('chl-boost').value='1';
   updateScales();
 }
-const layers    = {cur:true, edy:true, dep:true, gs:true, mld:false};
+const layers    = {cur:true, edy:true, dep:true, gs:true, mld:false, fsle:false};
 
 // Date state — default to 3 days ago (most reliable satellite data)
 const today = new Date();
@@ -592,6 +630,61 @@ function updateSeasonHint(){
     ? sel[0].notes
     : `${sel.length} species · ${month} targeting`;
   el.innerHTML = `<span style="color:var(--teal)">${sel.map(s=>s.ico).join(' ')}</span><br>${hint}`;
+}
+
+// ═══════════════════════════════════════════
+// NOAA CHART TOGGLE
+// ═══════════════════════════════════════════
+function toggleNOAAChart(){
+  noaaChartOn = !noaaChartOn;
+  document.getElementById('tog-noaa').classList.toggle('on', noaaChartOn);
+  document.getElementById('btn-noaa').classList.toggle('active', noaaChartOn);
+  noaaChartCache = {img:null, key:''};
+  if(noaaChartOn) loadNOAAChart().then(drawSatellite);
+  else drawSatellite();
+}
+
+// ═══════════════════════════════════════════
+// REGION SELECTOR
+// ═══════════════════════════════════════════
+let activeRegion = 'psl';
+
+function initRegions(){
+  const bar = document.getElementById('region-bar');
+  if(!bar) return;
+  bar.innerHTML = REGIONS.map(r=>`
+    <button id="rbtn-${r.id}" onclick="goToRegion('${r.id}')"
+      style="padding:5px 10px;border-radius:5px;border:1px solid var(--border);
+        background:${r.id===activeRegion?'var(--teal)':'var(--panel2)'};
+        color:${r.id===activeRegion?'var(--deep)':'var(--muted)'};
+        font-family:'Space Mono';font-size:9px;cursor:pointer;
+        backdrop-filter:blur(8px);white-space:nowrap;transition:all .2s">
+      ${r.emoji} ${r.name}
+    </button>`).join('');
+}
+
+function goToRegion(id){
+  const r = REGIONS.find(x=>x.id===id);
+  if(!r) return;
+  activeRegion = id;
+  vp.lat = r.lat;
+  vp.lng = r.lng;
+  vp.scale = r.scale;
+  // Update button styles
+  REGIONS.forEach(x=>{
+    const btn = document.getElementById('rbtn-'+x.id);
+    if(!btn) return;
+    btn.style.background = x.id===id ? 'var(--teal)' : 'var(--panel2)';
+    btn.style.color = x.id===id ? 'var(--deep)' : 'var(--muted)';
+  });
+  // Invalidate all caches for new viewport
+  bgCacheKey=''; contourCacheKey='';
+  Object.keys(satCache).forEach(k=>{satCache[k].key='';satCache[k].img=null;});
+  noaaChartCache={img:null,key:''};
+  invalidateMLD();
+  satCtx.clearRect(0,0,satCvs.width,satCvs.height);
+  clearTimeout(loop._satTimer);
+  loop._satTimer=setTimeout(loadAllSatellite,300);
 }
 
 // ═══════════════════════════════════════════
@@ -776,8 +869,44 @@ async function loadSatLayer(layerKey, dateOverride){
 }
 
 async function loadAllSatellite(){
-  await Promise.all(Object.keys(satLayers).map(k=>loadSatLayer(k)));
+  await Promise.all([
+    ...Object.keys(satLayers).map(k=>loadSatLayer(k)),
+    noaaChartOn ? loadNOAAChart() : Promise.resolve()
+  ]);
   drawSatellite();
+}
+
+async function loadNOAAChart(){
+  const b = getViewBounds();
+  const W = Math.round(satCvs.width), H = Math.round(satCvs.height);
+  const key = `noaa_${b.west.toFixed(3)}_${b.south.toFixed(3)}_${b.east.toFixed(3)}_${b.north.toFixed(3)}_${W}_${H}`;
+  if(noaaChartCache.key === key && noaaChartCache.img) return;
+
+  // NOAA Chart Display Service WMS — proxied through Netlify to avoid CORS
+  try{
+    const res = await fetch('/.netlify/functions/claude',{
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({
+        type:'noaa_chart',
+        west: b.west.toFixed(4), south: b.south.toFixed(4),
+        east: b.east.toFixed(4), north: b.north.toFixed(4),
+        width: W, height: H
+      })
+    });
+    if(!res.ok) throw new Error(`Proxy ${res.status}`);
+    const data = await res.json();
+    if(data.error) throw new Error(data.error);
+    const img = new Image();
+    await new Promise((resolve,reject)=>{
+      img.onload=resolve; img.onerror=reject;
+      img.src=`data:image/png;base64,${data.image}`;
+      setTimeout(()=>reject(new Error('timeout')),15000);
+    });
+    noaaChartCache = {img, key};
+  } catch(e){
+    console.warn('NOAA chart load failed:', e.message);
+    noaaChartCache = {img:null, key:''};
+  }
 }
 
 // ── HYCOM Mixed Layer Depth (thermocline proxy) ──
@@ -878,55 +1007,236 @@ function mldColor(pt){
   return            'rgba(255,  40,  0,  0.88)';      // strong warm core, red
 }
 
-function drawMLD(){
+// ── Fast cached MLD draw — O(1) per frame ──
+function drawMLDCached(){
   if(!mldGrid.length || !layers.mld) return;
-  const W=cvs.width, H=cvs.height;
+  // Build cache if not yet built
+  if(!mldCacheCanvas){
+    mldCacheCanvas = document.createElement('canvas');
+    mldCacheCanvas.width  = cvs.width;
+    mldCacheCanvas.height = cvs.height;
+    drawMLD(mldCacheCanvas); // render once into cache
+  }
+  // Draw cached canvas in one call — fast
   ctx.save();
+  ctx.drawImage(mldCacheCanvas, 0, 0);
+  ctx.restore();
+}
 
-  // ── If we have the raw WMS image, draw it directly then add contour labels ──
+// Call this whenever data or viewport changes to invalidate cache
+function invalidateMLD(){ mldCacheCanvas = null; fsleCacheCanvas = null; }
+
+// ═══════════════════════════════════════════
+// FSLE — Finite Size Lyapunov Exponents
+// Computed from current velocity grid in real time
+// High values = Lagrangian Coherent Structures = ocean walls = fish convergence
+// ═══════════════════════════════════════════
+let fsleCacheCanvas = null;
+
+function computeAndDrawFSLE(){
+  if(!currentGrid || currentGrid.length < 9) return;
+  if(!layers.fsle) return;
+  if(fsleCacheCanvas) {
+    ctx.save();
+    ctx.drawImage(fsleCacheCanvas,0,0);
+    ctx.restore();
+    return;
+  }
+
+  const W=cvs.width, H=cvs.height;
+  fsleCacheCanvas = document.createElement('canvas');
+  fsleCacheCanvas.width=W; fsleCacheCanvas.height=H;
+  const fCtx = fsleCacheCanvas.getContext('2d');
+
+  // Build a spatial map of current vectors for fast lookup
+  const gridMap = {};
+  const snapDeg = 0.25; // snap to 0.25° grid for lookup
+  for(const pt of currentGrid){
+    if(pt.u==null||pt.v==null) continue;
+    const key = `${Math.round(pt.lat/snapDeg)},${Math.round(pt.lng/snapDeg)}`;
+    gridMap[key] = pt;
+  }
+
+  function getUV(lat,lng){
+    const key = `${Math.round(lat/snapDeg)},${Math.round(lng/snapDeg)}`;
+    return gridMap[key] || null;
+  }
+
+  // Compute strain rate at each grid point
+  const strainPts = [];
+  let maxStrain = 0;
+  for(const pt of currentGrid){
+    if(pt.u==null||pt.v==null) continue;
+    const dlat=snapDeg, dlng=snapDeg;
+    const pN=getUV(pt.lat+dlat,pt.lng), pS=getUV(pt.lat-dlat,pt.lng);
+    const pE=getUV(pt.lat,pt.lng+dlng), pW=getUV(pt.lat,pt.lng-dlng);
+    if(!pN||!pS||!pE||!pW) continue;
+
+    // Velocity gradient tensor (finite differences)
+    const dudx=(pE.u-pW.u)/(2*dlng);
+    const dudy=(pN.u-pS.u)/(2*dlat);
+    const dvdx=(pE.v-pW.v)/(2*dlng);
+    const dvdy=(pN.v-pS.v)/(2*dlat);
+
+    // Strain rate = largest eigenvalue of symmetric strain tensor
+    // S = [[dudx, (dudy+dvdx)/2], [(dudy+dvdx)/2, dvdy]]
+    const sxx=dudx, syy=dvdy, sxy=(dudy+dvdx)/2;
+    // Eigenvalues of 2x2 symmetric matrix: (tr/2) ± sqrt((tr/2)² - det)
+    // But simpler: strain = sqrt(sxx²+syy²+2*sxy²) ≈ Frobenius norm
+    const strain = Math.sqrt(sxx*sxx + syy*syy + 2*sxy*sxy);
+
+    // Rotation / vorticity (helps identify eddy cores vs fronts)
+    const vort = dvdx - dudy; // positive = cyclonic (CCW), negative = anticyclonic
+
+    strainPts.push({lat:pt.lat, lng:pt.lng, strain, vort});
+    if(strain > maxStrain) maxStrain = strain;
+  }
+
+  if(!strainPts.length || maxStrain===0) { fsleCacheCanvas=null; return; }
+
+  // Render heatmap
+  const STEP = Math.max(3, Math.round(Math.min(W,H)/160));
+  const offW=Math.ceil(W/STEP), offH=Math.ceil(H/STEP);
+  const offCvs=document.createElement('canvas');
+  offCvs.width=offW; offCvs.height=offH;
+  const off=offCvs.getContext('2d');
+  const imgData=off.createImageData(offW,offH);
+  const d=imgData.data;
+
+  // Pre-compute screen positions
+  const spts=strainPts.map(p=>{
+    const[x,y]=geoToCanvas(p.lat,p.lng);
+    return{x,y,strain:p.strain,vort:p.vort};
+  });
+
+  for(let py=0;py<offH;py++){
+    for(let px=0;px<offW;px++){
+      const cx=px*STEP+STEP/2, cy=py*STEP+STEP/2;
+      const[lat,lng]=canvasToGeo(cx,cy);
+      const dep=depthAt(lat,lng);
+      if(dep!==null&&dep<2){const i=(py*offW+px)*4;d[i+3]=0;continue;}
+
+      // IDW from nearest strain points
+      let wSum=0,sSum=0,vSum=0,minD=Infinity;
+      for(const sp of spts){
+        const dx=sp.x-cx,dy=sp.y-cy,d2=dx*dx+dy*dy;
+        if(d2<minD)minD=d2;
+        const w=1/Math.max(1,d2);
+        wSum+=w;sSum+=sp.strain*w;vSum+=sp.vort*w;
+      }
+      if(minD>150*150){const i=(py*offW+px)*4;d[i+3]=0;continue;}
+
+      const strain=sSum/wSum;
+      const vort=vSum/wSum;
+      const t=Math.min(1,strain/maxStrain); // normalize 0-1
+
+      const i=(py*offW+px)*4;
+      if(t<0.15){d[i+3]=0;continue;} // transparent where strain is weak
+
+      // Color: dark purple (weak) → orange → white (strong LCS front)
+      // Vorticity hint: blue tinge = cyclonic eddy core, red = anticyclonic
+      let r,g,b;
+      if(t<0.35){
+        const f=(t-0.15)/0.20;
+        r=Math.round(80+100*f);g=Math.round(20+30*f);b=Math.round(120-40*f);
+      } else if(t<0.65){
+        const f=(t-0.35)/0.30;
+        r=Math.round(180+60*f);g=Math.round(50+80*f);b=Math.round(80-60*f);
+      } else {
+        const f=(t-0.65)/0.35;
+        r=255;g=Math.round(130+100*f);b=Math.round(20+40*f);
+      }
+      // Subtle vorticity tint
+      const vi=Math.min(1,Math.abs(vort)/maxStrain);
+      if(vort>0){b=Math.min(255,b+Math.round(vi*60));} // cyclonic = bluer
+      else{r=Math.min(255,r+Math.round(vi*30));} // anticyclonic = redder
+
+      d[i]=r;d[i+1]=g;d[i+2]=b;
+      d[i+3]=Math.round(140+80*t); // more opaque at stronger fronts
+    }
+  }
+  off.putImageData(imgData,0,0);
+  fCtx.imageSmoothingEnabled=true;
+  fCtx.imageSmoothingQuality='high';
+  fCtx.drawImage(offCvs,0,0,W,H);
+
+  // Legend
+  fCtx.shadowColor='rgba(0,0,0,0.9)';fCtx.shadowBlur=4;
+  fCtx.font='bold 9px "Space Mono",monospace';
+  fCtx.fillStyle='rgba(255,255,255,0.95)';
+  fCtx.fillText('OCEAN FRONTS / FSLE (Lagrangian Coherent Structures)',10,30);
+  fCtx.shadowBlur=0;
+  const lx=10,ly=42,lw=200;
+  const grad=fCtx.createLinearGradient(lx,0,lx+lw,0);
+  grad.addColorStop(0,'rgba(80,20,120,0)');
+  grad.addColorStop(0.3,'rgba(180,50,80,0.9)');
+  grad.addColorStop(0.7,'rgba(240,130,20,0.95)');
+  grad.addColorStop(1,'rgba(255,230,60,1)');
+  fCtx.fillStyle=grad;
+  fCtx.fillRect(lx,ly,lw,7);
+  fCtx.font='7px "Space Mono",monospace';
+  fCtx.fillStyle='rgba(255,255,255,0.9)';
+  fCtx.shadowColor='rgba(0,0,0,0.8)';fCtx.shadowBlur=2;
+  fCtx.fillText('Weak mixing',lx,ly+16);
+  fCtx.fillText('Front / Convergence →',lx+lw-90,ly+16);
+  fCtx.shadowBlur=0;
+
+  // Draw on main canvas
+  ctx.save();
+  ctx.drawImage(fsleCacheCanvas,0,0);
+  ctx.restore();
+}
+
+function drawMLD(targetCanvas){
+  targetCanvas = targetCanvas || cvs;
+  const W=targetCanvas.width, H=targetCanvas.height;
+  const tCtx = targetCanvas.getContext('2d');
+  tCtx.clearRect(0,0,W,H);
+
+  // ── If we have the raw WMS image, draw it directly ──
   if(mldGrid._img){
-    ctx.globalAlpha=0.72;
-    ctx.drawImage(mldGrid._img,0,0,W,H);
-    ctx.globalAlpha=1.0;
+    tCtx.globalAlpha=0.72;
+    tCtx.drawImage(mldGrid._img,0,0,W,H);
+    tCtx.globalAlpha=1.0;
 
     // Value labels when zoomed in
     if(vp.scale>2.0){
-      ctx.font='8px "Space Mono",monospace';
-      ctx.textAlign='center';
+      tCtx.font='8px "Space Mono",monospace';
+      tCtx.textAlign='center';
       for(const pt of mldGrid){
         const[x,y]=geoToCanvas(pt.lat,pt.lng);
         if(x<20||x>W-20||y<20||y>H-20) continue;
-        ctx.fillStyle='rgba(255,255,255,0.9)';
-        ctx.shadowColor='rgba(0,0,0,0.8)';ctx.shadowBlur=2;
-        ctx.fillText(Math.round(pt.mld_m)+'m',x,y+3);
-        ctx.shadowBlur=0;
+        tCtx.fillStyle='rgba(255,255,255,0.9)';
+        tCtx.shadowColor='rgba(0,0,0,0.8)';tCtx.shadowBlur=2;
+        tCtx.fillText(Math.round(pt.mld_m)+'m',x,y+3);
+        tCtx.shadowBlur=0;
       }
-      ctx.textAlign='left';
+      tCtx.textAlign='left';
     }
 
     // Legend
-    ctx.shadowColor='rgba(0,0,0,0.9)';ctx.shadowBlur=4;
-    ctx.font='bold 9px "Space Mono",monospace';
-    ctx.fillStyle='rgba(255,255,255,0.95)';
-    ctx.fillText('MIXED LAYER DEPTH · CMEMS (mlotst)',10,30);
-    ctx.shadowBlur=0;
+    tCtx.shadowColor='rgba(0,0,0,0.9)';tCtx.shadowBlur=4;
+    tCtx.font='bold 9px "Space Mono",monospace';
+    tCtx.fillStyle='rgba(255,255,255,0.95)';
+    tCtx.fillText('MIXED LAYER DEPTH · CMEMS (mlotst)',10,30);
+    tCtx.shadowBlur=0;
     const lx=10,ly=42,lw=180;
-    const grad=ctx.createLinearGradient(lx,0,lx+lw,0);
+    const grad=tCtx.createLinearGradient(lx,0,lx+lw,0);
     grad.addColorStop(0,'rgba(68,1,84,0.95)');    // viridis: deep purple = shallow
     grad.addColorStop(0.25,'rgba(59,82,139,0.95)');
     grad.addColorStop(0.5,'rgba(33,145,140,0.95)');
     grad.addColorStop(0.75,'rgba(94,201,98,0.95)');
     grad.addColorStop(1,'rgba(253,231,37,0.95)'); // yellow = deep MLD
-    ctx.fillStyle=grad;
-    ctx.fillRect(lx,ly,lw,7);
-    ctx.font='7px "Space Mono",monospace';
-    ctx.fillStyle='rgba(255,255,255,0.95)';
-    ctx.shadowColor='rgba(0,0,0,0.8)';ctx.shadowBlur=2;
-    ctx.fillText('0m (shallow)',lx,ly+16);
-    ctx.fillText('~100m',lx+lw/2-14,ly+16);
-    ctx.fillText('200m+ (deep)',lx+lw-48,ly+16);
-    ctx.shadowBlur=0;
-    ctx.restore();
+    tCtx.fillStyle=grad;
+    tCtx.fillRect(lx,ly,lw,7);
+    tCtx.font='7px "Space Mono",monospace';
+    tCtx.fillStyle='rgba(255,255,255,0.95)';
+    tCtx.shadowColor='rgba(0,0,0,0.8)';tCtx.shadowBlur=2;
+    tCtx.fillText('0m (shallow)',lx,ly+16);
+    tCtx.fillText('~100m',lx+lw/2-14,ly+16);
+    tCtx.fillText('200m+ (deep)',lx+lw-48,ly+16);
+    tCtx.shadowBlur=0;
+    tCtx.restore();
     return;
   }
 
@@ -939,36 +1249,34 @@ function drawMLD(){
   const imgData = off.createImageData(offW, offH);
   const d = imgData.data;
 
-  // Pre-sort grid for fast lookup
   const grid = mldGrid;
+  // Pre-compute geo coords for each grid point for fast lookup
+  const gridXY = grid.map(pt=>{
+    const[x,y]=geoToCanvas(pt.lat,pt.lng);
+    return{x,y,anom:pt.anom};
+  });
 
   for(let py=0; py<offH; py++){
     for(let px=0; px<offW; px++){
-      // Map pixel to geo coords
-      const [lat,lng] = canvasToGeo(px*STEP+STEP/2, py*STEP+STEP/2);
-
-      // Skip land
+      // Skip land using a fast check
+      const cx=px*STEP+STEP/2, cy=py*STEP+STEP/2;
+      const [lat,lng] = canvasToGeo(cx,cy);
       const depth = depthAt(lat,lng);
       if(depth!==null && depth<2){ 
         const i=(py*offW+px)*4;
         d[i+3]=0; continue; 
       }
 
-      // Inverse-distance weighted interpolation from nearest 4 points
-      let wSum=0, vSum=0;
-      const near=[];
-      for(const pt of grid){
-        const dist=Math.hypot(pt.lat-lat,(pt.lng-lng)*Math.cos(lat*Math.PI/180));
-        near.push({dist,anom:pt.anom});
+      // Fast IDW in PIXEL space (no trig needed)
+      let wSum=0, vSum=0, minDist=Infinity;
+      for(const pt of gridXY){
+        const dx=pt.x-cx, dy=pt.y-cy;
+        const dist2=dx*dx+dy*dy;
+        if(dist2<minDist) minDist=dist2;
+        const w=1/Math.max(1,dist2);
+        wSum+=w; vSum+=pt.anom*w;
       }
-      near.sort((a,b)=>a.dist-b.dist);
-      const top=near.slice(0,4);
-      if(!top.length||top[0].dist>2.0){ const i=(py*offW+px)*4; d[i+3]=0; continue; }
-
-      for(const n of top){
-        const w=1/Math.max(0.0001,n.dist*n.dist);
-        wSum+=w; vSum+=n.anom*w;
-      }
+      if(minDist>200*200){ const i=(py*offW+px)*4; d[i+3]=0; continue; } // too far
       const anom=vSum/wSum;
 
       // Map anomaly to color
@@ -1006,54 +1314,54 @@ function drawMLD(){
   off.putImageData(imgData,0,0);
 
   // Upscale smoothly to full canvas with slight blur for smooth blending
-  ctx.imageSmoothingEnabled=true;
-  ctx.imageSmoothingQuality='high';
-  ctx.drawImage(offCvs,0,0,W,H);
-  ctx.imageSmoothingEnabled=false;
+  tCtx.imageSmoothingEnabled=true;
+  tCtx.imageSmoothingQuality='high';
+  tCtx.drawImage(offCvs,0,0,W,H);
+  tCtx.imageSmoothingEnabled=false;
 
   // SSH value labels when zoomed in
   if(vp.scale>2.0){
-    ctx.font='8px "Space Mono",monospace';
-    ctx.textAlign='center';
+    tCtx.font='8px "Space Mono",monospace';
+    tCtx.textAlign='center';
     for(const pt of grid){
       const[x,y]=geoToCanvas(pt.lat,pt.lng);
       if(x<20||x>W-20||y<20||y>H-20) continue;
-      ctx.fillStyle='rgba(0,0,0,0.75)';
-      ctx.shadowColor='rgba(255,255,255,0.6)';ctx.shadowBlur=2;
-      ctx.fillText((pt.anom>=0?'+':'')+pt.anom.toFixed(2)+'m',x,y+3);
-      ctx.shadowBlur=0;
+      tCtx.fillStyle='rgba(0,0,0,0.75)';
+      tCtx.shadowColor='rgba(255,255,255,0.6)';tCtx.shadowBlur=2;
+      tCtx.fillText((pt.anom>=0?'+':'')+pt.anom.toFixed(2)+'m',x,y+3);
+      tCtx.shadowBlur=0;
     }
-    ctx.textAlign='left';
+    tCtx.textAlign='left';
   }
 
   // Legend
-  ctx.shadowColor='rgba(0,0,0,0.9)';ctx.shadowBlur=4;
-  ctx.font='bold 9px "Space Mono",monospace';
-  ctx.fillStyle='rgba(255,255,255,0.95)';
-  ctx.fillText('SSH / THERMOCLINE (HYCOM)',10,30);
-  ctx.shadowBlur=0;
+  tCtx.shadowColor='rgba(0,0,0,0.9)';tCtx.shadowBlur=4;
+  tCtx.font='bold 9px "Space Mono",monospace';
+  tCtx.fillStyle='rgba(255,255,255,0.95)';
+  tCtx.fillText('SSH / THERMOCLINE (HYCOM)',10,30);
+  tCtx.shadowBlur=0;
 
   const lx=10,ly=42,lw=170;
-  const grad=ctx.createLinearGradient(lx,0,lx+lw,0);
+  const grad=tCtx.createLinearGradient(lx,0,lx+lw,0);
   grad.addColorStop(0,'rgba(0,80,255,0.95)');
   grad.addColorStop(0.35,'rgba(160,200,255,0.95)');
   grad.addColorStop(0.5,'rgba(255,255,200,0.95)');
   grad.addColorStop(0.70,'rgba(255,145,0,0.95)');
   grad.addColorStop(1,'rgba(255,0,0,0.95)');
-  ctx.fillStyle=grad;
-  ctx.fillRect(lx,ly,lw,7);
-  ctx.strokeStyle='rgba(255,255,255,0.5)';ctx.lineWidth=0.5;
-  ctx.strokeRect(lx,ly,lw,7);
-  ctx.font='7px "Space Mono",monospace';
-  ctx.fillStyle='rgba(255,255,255,0.95)';
-  ctx.shadowColor='rgba(0,0,0,0.8)';ctx.shadowBlur=2;
-  ctx.fillText('↑ Upwelling',lx,ly+16);
-  ctx.fillText('Neutral',lx+lw/2-14,ly+16);
-  ctx.fillText('Warm Core ↓',lx+lw-44,ly+16);
-  ctx.shadowBlur=0;
+  tCtx.fillStyle=grad;
+  tCtx.fillRect(lx,ly,lw,7);
+  tCtx.strokeStyle='rgba(255,255,255,0.5)';tCtx.lineWidth=0.5;
+  tCtx.strokeRect(lx,ly,lw,7);
+  tCtx.font='7px "Space Mono",monospace';
+  tCtx.fillStyle='rgba(255,255,255,0.95)';
+  tCtx.shadowColor='rgba(0,0,0,0.8)';tCtx.shadowBlur=2;
+  tCtx.fillText('↑ Upwelling',lx,ly+16);
+  tCtx.fillText('Neutral',lx+lw/2-14,ly+16);
+  tCtx.fillText('Warm Core ↓',lx+lw-44,ly+16);
+  tCtx.shadowBlur=0;
 
-  ctx.restore();
 }
+
 
 // ── Multi-day chlorophyll trend analysis ──
 let chlTrend = null; // populated before AI analysis
@@ -1158,9 +1466,14 @@ function drawSatellite(){
   offCvs.width=W; offCvs.height=H;
   const off=offCvs.getContext('2d');
 
+  // ── NOAA Nautical Chart base (drawn first, behind everything) ──
+  if(noaaChartOn && noaaChartCache.img){
+    try{ satCtx.globalAlpha=1.0; satCtx.drawImage(noaaChartCache.img,0,0,W,H); }catch(e){}
+  }
+
   // ── True color base ──
   if(satLayers.tc && satCache.tc.img){
-    try{ satCtx.globalAlpha=1.0; satCtx.drawImage(satCache.tc.img,0,0,W,H); }catch(e){}
+    try{ satCtx.globalAlpha=noaaChartOn?0.5:1.0; satCtx.drawImage(satCache.tc.img,0,0,W,H); }catch(e){}
   }
 
   // ── SST with opacity control ──
@@ -1314,22 +1627,22 @@ function drawDepthContours(){
       else{r=5;g=15;b=80;}
     }
     const alpha=hasSat?(isMajor?0.7:0.25):(isMajor?0.92:0.38);
-    ctx.strokeStyle=`rgba(${r},${g},${b},${alpha})`;
-    ctx.lineWidth=isHundred?1.8:isMajor?1.2:0.5;
+    tCtx.strokeStyle=`rgba(${r},${g},${b},${alpha})`;
+    tCtx.lineWidth=isHundred?1.8:isMajor?1.2:0.5;
 
     let labelDrawn=false;
     for(const seg of segments){
       const[x0,y0]=geoToCanvas(seg[0][0],seg[0][1]);
       const[x1,y1]=geoToCanvas(seg[1][0],seg[1][1]);
       if((x0<-10&&x1<-10)||(x0>W+10&&x1>W+10)||(y0<-10&&y1<-10)||(y0>H+10&&y1>H+10))continue;
-      ctx.beginPath();ctx.moveTo(x0,y0);ctx.lineTo(x1,y1);ctx.stroke();
+      tCtx.beginPath();tCtx.moveTo(x0,y0);tCtx.lineTo(x1,y1);tCtx.stroke();
       if(isMajor&&!labelDrawn&&x0>40&&x0<W-80&&y0>20&&y0<H-20){
-        ctx.save();
-        ctx.font=isHundred?'bold 9px "Space Mono",monospace':'8px "Space Mono",monospace';
-        ctx.fillStyle=hasSat?`rgba(255,255,255,0.9)`:`rgba(${r},${g},${b},0.95)`;
-        ctx.shadowColor='rgba(0,0,0,0.9)';ctx.shadowBlur=4;
-        ctx.fillText(level+'ft',x0+2,y0-2);
-        ctx.shadowBlur=0;ctx.restore();
+        tCtx.save();
+        tCtx.font=isHundred?'bold 9px "Space Mono",monospace':'8px "Space Mono",monospace';
+        tCtx.fillStyle=hasSat?`rgba(255,255,255,0.9)`:`rgba(${r},${g},${b},0.95)`;
+        tCtx.shadowColor='rgba(0,0,0,0.9)';tCtx.shadowBlur=4;
+        tCtx.fillText(level+'ft',x0+2,y0-2);
+        tCtx.shadowBlur=0;tCtx.restore();
         labelDrawn=true;
       }
     }
@@ -1352,7 +1665,7 @@ function interpCurrentAt(lat,lng){
 function drawCurrentVectors(t){
   if(!currentGrid.length)return;
   const W=cvs.width, H=cvs.height;
-  ctx.save();
+  tCtx.save();
   const hasSat=Object.values(satCache).some(s=>s.img&&(satLayers.chl||satLayers.sst||satLayers.tc));
   const sp=22; // tight arrows — data interpolated at pixel level
   for(let px=sp/2;px<W;px+=sp){
@@ -1377,20 +1690,20 @@ function drawCurrentVectors(t){
         const r=Math.round(74+s*171),g2=Math.round(200-s*50),b=Math.round(255-s*205);
         arrowColor=`rgba(${r},${g2},${b},${0.5+s*0.35})`;
       }
-      ctx.strokeStyle=arrowColor;
-      ctx.lineWidth=hasSat?(0.9+s*0.4):(0.8+s*0.5);
-      ctx.beginPath();ctx.moveTo(px+ox,py+oy);ctx.lineTo(px+ox+dx,py+oy+dy);ctx.stroke();
+      tCtx.strokeStyle=arrowColor;
+      tCtx.lineWidth=hasSat?(0.9+s*0.4):(0.8+s*0.5);
+      tCtx.beginPath();tCtx.moveTo(px+ox,py+oy);tCtx.lineTo(px+ox+dx,py+oy+dy);tCtx.stroke();
       const hl=4+s*2,ba=Math.atan2(-dy,-dx);
-      ctx.beginPath();
-      ctx.moveTo(px+ox+dx,py+oy+dy);
-      ctx.lineTo(px+ox+dx+hl*Math.cos(ba+0.4),py+oy+dy+hl*Math.sin(ba+0.4));
-      ctx.moveTo(px+ox+dx,py+oy+dy);
-      ctx.lineTo(px+ox+dx+hl*Math.cos(ba-0.4),py+oy+dy+hl*Math.sin(ba-0.4));
-      ctx.stroke();
+      tCtx.beginPath();
+      tCtx.moveTo(px+ox+dx,py+oy+dy);
+      tCtx.lineTo(px+ox+dx+hl*Math.cos(ba+0.4),py+oy+dy+hl*Math.sin(ba+0.4));
+      tCtx.moveTo(px+ox+dx,py+oy+dy);
+      tCtx.lineTo(px+ox+dx+hl*Math.cos(ba-0.4),py+oy+dy+hl*Math.sin(ba-0.4));
+      tCtx.stroke();
       if(cur.speed_kt>2.5&&sp>30){
-        ctx.font='7px "Space Mono",monospace';
-        ctx.fillStyle=arrowColor;
-        ctx.fillText(`${cur.speed_kt.toFixed(1)}kt`,px+ox+dx+3,py+oy+dy-2);
+        tCtx.font='7px "Space Mono",monospace';
+        tCtx.fillStyle=arrowColor;
+        tCtx.fillText(`${cur.speed_kt.toFixed(1)}kt`,px+ox+dx+3,py+oy+dy-2);
       }
     }
   }
@@ -1398,10 +1711,10 @@ function drawCurrentVectors(t){
   for(const pt of currentGrid){
     const[x,y]=geoToCanvas(pt.lat,pt.lng);
     if(x<0||x>W||y<0||y>H)continue;
-    ctx.beginPath();ctx.arc(x,y,2,0,Math.PI*2);
-    ctx.fillStyle='rgba(74,200,255,0.4)';ctx.fill();
+    tCtx.beginPath();tCtx.arc(x,y,2,0,Math.PI*2);
+    tCtx.fillStyle='rgba(74,200,255,0.4)';tCtx.fill();
   }
-  ctx.restore();
+  tCtx.restore();
 }
 
 // ═══════════════════════════════════════════
@@ -1499,12 +1812,12 @@ function drawEddies(t){
     const isCCW=eddy.sense==='CCW';
     const col=isCCW?'#00d4b8':'#f5a623';
     const strength=Math.min(1,eddy.curlMag/0.04);
-    ctx.save();
-    const grad=ctx.createRadialGradient(cx,cy,0,cx,cy,radiusPx);
+    tCtx.save();
+    const grad=tCtx.createRadialGradient(cx,cy,0,cx,cy,radiusPx);
     grad.addColorStop(0,col+Math.round(0.14*strength*255).toString(16).padStart(2,'0'));
     grad.addColorStop(0.6,col+'08');
     grad.addColorStop(1,'transparent');
-    ctx.beginPath();ctx.arc(cx,cy,radiusPx,0,Math.PI*2);ctx.fillStyle=grad;ctx.fill();
+    tCtx.beginPath();tCtx.arc(cx,cy,radiusPx,0,Math.PI*2);tCtx.fillStyle=grad;tCtx.fill();
     const numArrows=Math.max(4,Math.round(radiusPx/12));
     const rotDir=isCCW?1:-1;
     const rotOffset=t*rotDir*0.35;
@@ -1514,17 +1827,17 @@ function drawEddies(t){
       const tA=angle+rotDir*Math.PI/2;
       const al=9+strength*5;
       const tx=Math.cos(tA)*al,ty=Math.sin(tA)*al;
-      ctx.strokeStyle=col+'cc';ctx.lineWidth=1.5;
-      ctx.beginPath();ctx.moveTo(ax-tx*0.4,ay-ty*0.4);ctx.lineTo(ax+tx*0.6,ay+ty*0.6);ctx.stroke();
+      tCtx.strokeStyle=col+'cc';tCtx.lineWidth=1.5;
+      tCtx.beginPath();tCtx.moveTo(ax-tx*0.4,ay-ty*0.4);tCtx.lineTo(ax+tx*0.6,ay+ty*0.6);tCtx.stroke();
       const ha=Math.atan2(ty,tx);
-      ctx.beginPath();ctx.moveTo(ax+tx*0.6,ay+ty*0.6);ctx.lineTo(ax+tx*0.6-5*Math.cos(ha-0.4),ay+ty*0.6-5*Math.sin(ha-0.4));ctx.moveTo(ax+tx*0.6,ay+ty*0.6);ctx.lineTo(ax+tx*0.6-5*Math.cos(ha+0.4),ay+ty*0.6-5*Math.sin(ha+0.4));ctx.stroke();
+      tCtx.beginPath();tCtx.moveTo(ax+tx*0.6,ay+ty*0.6);tCtx.lineTo(ax+tx*0.6-5*Math.cos(ha-0.4),ay+ty*0.6-5*Math.sin(ha-0.4));tCtx.moveTo(ax+tx*0.6,ay+ty*0.6);tCtx.lineTo(ax+tx*0.6-5*Math.cos(ha+0.4),ay+ty*0.6-5*Math.sin(ha+0.4));tCtx.stroke();
     }
     const pulse=(Math.sin(t*1.5+idx)*0.5+0.5);
-    ctx.beginPath();ctx.arc(cx,cy,4+pulse*3,0,Math.PI*2);ctx.strokeStyle=col+'aa';ctx.lineWidth=1.5;ctx.stroke();
-    ctx.beginPath();ctx.arc(cx,cy,4,0,Math.PI*2);ctx.fillStyle=col;ctx.fill();
-    ctx.font='bold 9px "Space Mono",monospace';ctx.fillStyle=col;ctx.textAlign='center';
-    ctx.fillText(isCCW?'↺ EDDY':'↻ EDDY',cx,cy-radiusPx-6);
-    ctx.textAlign='left';ctx.restore();
+    tCtx.beginPath();tCtx.arc(cx,cy,4+pulse*3,0,Math.PI*2);tCtx.strokeStyle=col+'aa';tCtx.lineWidth=1.5;tCtx.stroke();
+    tCtx.beginPath();tCtx.arc(cx,cy,4,0,Math.PI*2);tCtx.fillStyle=col;tCtx.fill();
+    tCtx.font='bold 9px "Space Mono",monospace';tCtx.fillStyle=col;tCtx.textAlign='center';
+    tCtx.fillText(isCCW?'↺ EDDY':'↻ EDDY',cx,cy-radiusPx-6);
+    tCtx.textAlign='left';tCtx.restore();
   });
 }
 
@@ -1535,7 +1848,7 @@ function draw(){
   const W=cvs.width, H=cvs.height;
   if(!W||!H)return;
   const t=animT;
-  ctx.clearRect(0,0,W,H);
+  tCtx.clearRect(0,0,W,H);
 
   const hasSat=Object.values(satCache).some(s=>s.img&&(satLayers.chl||satLayers.sst||satLayers.tc));
 
@@ -1558,60 +1871,60 @@ function draw(){
         bc.fillStyle=`rgb(${r},${g},${b})`;bc.fillRect(px,py,step,step);
       }
     }
-    ctx.drawImage(bgCache,0,0);
+    tCtx.drawImage(bgCache,0,0);
   }
 
   // Land polygon
-  ctx.save();ctx.beginPath();let first=true;
-  for(const[lng,lat]of COAST){const[x,y]=geoToCanvas(lat,lng);first?(ctx.moveTo(x,y),first=false):ctx.lineTo(x,y);}
-  ctx.closePath();
-  ctx.fillStyle=hasSat?'#1a2a14':'#c8c090';
-  ctx.fill();
-  ctx.strokeStyle=hasSat?'#2a4020':'#8a7040';ctx.lineWidth=1.5;ctx.stroke();
-  ctx.restore();
+  tCtx.save();tCtx.beginPath();let first=true;
+  for(const[lng,lat]of COAST){const[x,y]=geoToCanvas(lat,lng);first?(tCtx.moveTo(x,y),first=false):tCtx.lineTo(x,y);}
+  tCtx.closePath();
+  tCtx.fillStyle=hasSat?'#1a2a14':'#c8c090';
+  tCtx.fill();
+  tCtx.strokeStyle=hasSat?'#2a4020':'#8a7040';tCtx.lineWidth=1.5;tCtx.stroke();
+  tCtx.restore();
 
   // IRL
-  ctx.save();ctx.beginPath();first=true;
+  tCtx.save();tCtx.beginPath();first=true;
   const irl=[[27.75,-80.42],[27.65,-80.40],[27.50,-80.38],[27.35,-80.34],[27.20,-80.30],[27.10,-80.27],[26.95,-80.20],[26.80,-80.15],[26.80,-80.13],[26.95,-80.18],[27.10,-80.25],[27.20,-80.28],[27.35,-80.32],[27.50,-80.36],[27.65,-80.38],[27.75,-80.40]];
-  for(const[lat,lng]of irl){const[x,y]=geoToCanvas(lat,lng);first?(ctx.moveTo(x,y),first=false):ctx.lineTo(x,y);}
-  ctx.closePath();ctx.fillStyle=hasSat?'#0a1a24':'#a8cce8';ctx.fill();ctx.restore();
+  for(const[lat,lng]of irl){const[x,y]=geoToCanvas(lat,lng);first?(tCtx.moveTo(x,y),first=false):tCtx.lineTo(x,y);}
+  tCtx.closePath();tCtx.fillStyle=hasSat?'#0a1a24':'#a8cce8';tCtx.fill();tCtx.restore();
 
   // Grid lines
-  ctx.save();ctx.strokeStyle=hasSat?'#ffffff11':'#1a3a5a33';ctx.lineWidth=0.5;
+  tCtx.save();tCtx.strokeStyle=hasSat?'#ffffff11':'#1a3a5a33';tCtx.lineWidth=0.5;
   const latS=Math.floor((vp.lat-BASE_DLAT/vp.scale)*4)/4;
   for(let la=latS;la<vp.lat+BASE_DLAT/vp.scale;la+=0.25){
-    const[,y]=geoToCanvas(la,vp.lng);ctx.beginPath();ctx.moveTo(0,y);ctx.lineTo(W,y);ctx.stroke();
-    ctx.font='8px "Space Mono",monospace';ctx.fillStyle=hasSat?'rgba(255,255,255,0.4)':'#4a7a9b88';
-    ctx.fillText(`${la.toFixed(2)}°N`,4,y-2);
+    const[,y]=geoToCanvas(la,vp.lng);tCtx.beginPath();tCtx.moveTo(0,y);tCtx.lineTo(W,y);tCtx.stroke();
+    tCtx.font='8px "Space Mono",monospace';tCtx.fillStyle=hasSat?'rgba(255,255,255,0.4)':'#4a7a9b88';
+    tCtx.fillText(`${la.toFixed(2)}°N`,4,y-2);
   }
   const lngS=Math.floor((vp.lng-BASE_DLNG/vp.scale)*4)/4;
   for(let ln=lngS;ln<vp.lng+BASE_DLNG/vp.scale;ln+=0.25){
-    const[x]=geoToCanvas(vp.lat,ln);ctx.beginPath();ctx.moveTo(x,0);ctx.lineTo(x,H);ctx.stroke();
-    ctx.font='8px "Space Mono",monospace';ctx.fillStyle=hasSat?'rgba(255,255,255,0.4)':'#4a7a9b88';
-    ctx.fillText(`${Math.abs(ln).toFixed(2)}°W`,x+2,H-4);
+    const[x]=geoToCanvas(vp.lat,ln);tCtx.beginPath();tCtx.moveTo(x,0);tCtx.lineTo(x,H);tCtx.stroke();
+    tCtx.font='8px "Space Mono",monospace';tCtx.fillStyle=hasSat?'rgba(255,255,255,0.4)':'#4a7a9b88';
+    tCtx.fillText(`${Math.abs(ln).toFixed(2)}°W`,x+2,H-4);
   }
-  ctx.restore();
+  tCtx.restore();
 
   // Depth contours
   if(layers.dep) drawDepthContours();
 
   // Gulf Stream edge
   if(layers.gs){
-    ctx.save();ctx.beginPath();first=true;
+    tCtx.save();tCtx.beginPath();first=true;
     for(let lat=vp.lat+BASE_DLAT/vp.scale+0.1;lat>=vp.lat-BASE_DLAT/vp.scale-0.1;lat-=0.05){
       const gsLng=-80.15+(lat-27.3)*0.12+Math.sin(lat*3.5+t*0.3)*0.07;
-      const[x,y]=geoToCanvas(lat,gsLng);first?(ctx.moveTo(x,y),first=false):ctx.lineTo(x,y);
+      const[x,y]=geoToCanvas(lat,gsLng);first?(tCtx.moveTo(x,y),first=false):tCtx.lineTo(x,y);
     }
-    ctx.strokeStyle='rgba(245,166,35,0.85)';ctx.lineWidth=2.5;ctx.setLineDash([14,8]);ctx.stroke();ctx.setLineDash([]);
+    tCtx.strokeStyle='rgba(245,166,35,0.85)';tCtx.lineWidth=2.5;tCtx.setLineDash([14,8]);tCtx.stroke();tCtx.setLineDash([]);
     const ml=vp.lat+0.05,gl=-80.15+(ml-27.3)*0.12;
     const[lx,ly]=geoToCanvas(ml,gl);
     if(lx>0&&lx<W){
-      ctx.font='bold 11px "Space Mono",monospace';ctx.fillStyle='rgba(245,166,35,.9)';
-      ctx.shadowColor='rgba(0,0,0,0.8)';ctx.shadowBlur=3;
-      ctx.fillText('GULF STREAM →',lx+8,ly-6);
-      ctx.shadowBlur=0;
+      tCtx.font='bold 11px "Space Mono",monospace';tCtx.fillStyle='rgba(245,166,35,.9)';
+      tCtx.shadowColor='rgba(0,0,0,0.8)';tCtx.shadowBlur=3;
+      tCtx.fillText('GULF STREAM →',lx+8,ly-6);
+      tCtx.shadowBlur=0;
     }
-    ctx.restore();
+    tCtx.restore();
   }
 
   // Currents
@@ -1619,12 +1932,13 @@ function draw(){
 
   // Eddies
   if(layers.edy && currentGrid.length>0) drawEddies(t);
-  if(layers.mld && mldGrid.length>0) drawMLD();
+  if(layers.mld && mldGrid.length>0) drawMLDCached();
+  if(layers.fsle) computeAndDrawFSLE();
 
   // Landmarks
-  ctx.save();
+  tCtx.save();
   const txtColor=hasSat?'rgba(255,255,255,0.9)':'#fff';
-  ctx.shadowColor='rgba(0,0,0,0.8)';ctx.shadowBlur=3;
+  tCtx.shadowColor='rgba(0,0,0,0.8)';tCtx.shadowBlur=3;
   
   // Major ports & inlets — scale-dependent visibility
   const ports=[
@@ -1657,40 +1971,40 @@ function draw(){
     const[px2,py2]=geoToCanvas(p.lat,p.lng);
     if(px2<-20||px2>W+20||py2<-20||py2>H+20)continue;
     const r=p.major?4:3;
-    ctx.beginPath();ctx.arc(px2,py2,r,0,Math.PI*2);
-    ctx.fillStyle=p.major?txtColor:'#ffeeaa';ctx.fill();
+    tCtx.beginPath();tCtx.arc(px2,py2,r,0,Math.PI*2);
+    tCtx.fillStyle=p.major?txtColor:'#ffeeaa';tCtx.fill();
     if(p.major||showMinor){
-      ctx.font=p.major?'bold 9px "Space Mono",monospace':'8px "Space Mono",monospace';
-      ctx.fillStyle=p.major?txtColor:'#ffeeaa';
-      ctx.fillText(p.name,px2+r+3,py2+4);
+      tCtx.font=p.major?'bold 9px "Space Mono",monospace':'8px "Space Mono",monospace';
+      tCtx.fillStyle=p.major?txtColor:'#ffeeaa';
+      tCtx.fillText(p.name,px2+r+3,py2+4);
     }
   }
-  ctx.shadowBlur=0;ctx.restore();
+  tCtx.shadowBlur=0;tCtx.restore();
 
   // N arrow + scale bar
-  ctx.save();
+  tCtx.save();
   const nx=W-44,ny=46;
-  ctx.strokeStyle='var(--teal)';ctx.fillStyle='var(--teal)';ctx.lineWidth=1.5;
-  ctx.shadowColor='rgba(0,0,0,0.8)';ctx.shadowBlur=3;
-  ctx.beginPath();ctx.moveTo(nx,ny+13);ctx.lineTo(nx,ny-13);ctx.stroke();
-  ctx.beginPath();ctx.moveTo(nx,ny-13);ctx.lineTo(nx-4,ny-4);ctx.lineTo(nx+4,ny-4);ctx.closePath();ctx.fill();
-  ctx.font='bold 9px "Space Mono",monospace';ctx.fillStyle='var(--teal)';ctx.fillText('N',nx-3,ny-17);
+  tCtx.strokeStyle='var(--teal)';tCtx.fillStyle='var(--teal)';tCtx.lineWidth=1.5;
+  tCtx.shadowColor='rgba(0,0,0,0.8)';tCtx.shadowBlur=3;
+  tCtx.beginPath();tCtx.moveTo(nx,ny+13);tCtx.lineTo(nx,ny-13);tCtx.stroke();
+  tCtx.beginPath();tCtx.moveTo(nx,ny-13);tCtx.lineTo(nx-4,ny-4);tCtx.lineTo(nx+4,ny-4);tCtx.closePath();tCtx.fill();
+  tCtx.font='bold 9px "Space Mono",monospace';tCtx.fillStyle='var(--teal)';tCtx.fillText('N',nx-3,ny-17);
   const sbY=H-42,sbX=W/2,pxPer10mi=(W/(BASE_DLNG/vp.scale*55))*10;
-  ctx.strokeStyle='rgba(255,255,255,0.8)';ctx.lineWidth=1.5;
-  ctx.beginPath();ctx.moveTo(sbX-pxPer10mi/2,sbY);ctx.lineTo(sbX+pxPer10mi/2,sbY);ctx.stroke();
-  ctx.beginPath();ctx.moveTo(sbX-pxPer10mi/2,sbY-4);ctx.lineTo(sbX-pxPer10mi/2,sbY+4);ctx.stroke();
-  ctx.beginPath();ctx.moveTo(sbX+pxPer10mi/2,sbY-4);ctx.lineTo(sbX+pxPer10mi/2,sbY+4);ctx.stroke();
-  ctx.font='8px "Space Mono",monospace';ctx.fillStyle='rgba(255,255,255,0.8)';ctx.textAlign='center';
-  ctx.fillText('10 mi',sbX,sbY+12);ctx.textAlign='left';
-  ctx.shadowBlur=0;ctx.restore();
+  tCtx.strokeStyle='rgba(255,255,255,0.8)';tCtx.lineWidth=1.5;
+  tCtx.beginPath();tCtx.moveTo(sbX-pxPer10mi/2,sbY);tCtx.lineTo(sbX+pxPer10mi/2,sbY);tCtx.stroke();
+  tCtx.beginPath();tCtx.moveTo(sbX-pxPer10mi/2,sbY-4);tCtx.lineTo(sbX-pxPer10mi/2,sbY+4);tCtx.stroke();
+  tCtx.beginPath();tCtx.moveTo(sbX+pxPer10mi/2,sbY-4);tCtx.lineTo(sbX+pxPer10mi/2,sbY+4);tCtx.stroke();
+  tCtx.font='8px "Space Mono",monospace';tCtx.fillStyle='rgba(255,255,255,0.8)';tCtx.textAlign='center';
+  tCtx.fillText('10 mi',sbX,sbY+12);tCtx.textAlign='left';
+  tCtx.shadowBlur=0;tCtx.restore();
 
   // Data watermark
   if(dataFetchTime){
-    ctx.save();ctx.font='8px "Space Mono",monospace';
-    ctx.fillStyle='rgba(0,212,184,0.5)';
-    ctx.shadowColor='rgba(0,0,0,0.8)';ctx.shadowBlur=2;
-    ctx.fillText(`★ CURRENTS LIVE · ${dataFetchTime.toLocaleTimeString()} · Copernicus/MeteoFrance`,10,H-6);
-    ctx.shadowBlur=0;ctx.restore();
+    tCtx.save();tCtx.font='8px "Space Mono",monospace';
+    tCtx.fillStyle='rgba(0,212,184,0.5)';
+    tCtx.shadowColor='rgba(0,0,0,0.8)';tCtx.shadowBlur=2;
+    tCtx.fillText(`★ CURRENTS LIVE · ${dataFetchTime.toLocaleTimeString()} · Copernicus/MeteoFrance`,10,H-6);
+    tCtx.shadowBlur=0;tCtx.restore();
   }
 
   // Hotspot pins
@@ -1700,15 +2014,15 @@ function draw(){
     const[x,y]=geoToCanvas(hs.lat,hs.lng);
     if(x<-20||x>W+20||y<-20||y>H+20)return;
     const c=PC[i]||'#00d4b8',pulse=(Math.sin(animT*2+i)*0.5+0.5);
-    ctx.save();
-    ctx.shadowColor='rgba(0,0,0,0.8)';ctx.shadowBlur=4;
-    ctx.beginPath();ctx.arc(x,y,13+pulse*5,0,Math.PI*2);ctx.strokeStyle=c+'55';ctx.lineWidth=1.5;ctx.stroke();
-    ctx.beginPath();ctx.arc(x,y,10,0,Math.PI*2);ctx.fillStyle=c;ctx.fill();ctx.strokeStyle='rgba(255,255,255,0.8)';ctx.lineWidth=1.5;ctx.stroke();
-    ctx.font='bold 10px "Bebas Neue",sans-serif';ctx.fillStyle='#000';ctx.textAlign='center';ctx.textBaseline='middle';ctx.fillText(i+1,x,y+1);
-    ctx.font='bold 9px "Space Mono",monospace';ctx.fillStyle=c;ctx.textAlign='left';ctx.textBaseline='alphabetic';
-    ctx.fillText(hs.name&&hs.name.length>18?hs.name.substr(0,18)+'…':hs.name||'',x+13,y-2);
-    ctx.font='8px "Space Mono",monospace';ctx.fillStyle='rgba(255,255,255,0.8)';ctx.fillText(hs.location||'',x+13,y+9);
-    ctx.shadowBlur=0;ctx.restore();
+    tCtx.save();
+    tCtx.shadowColor='rgba(0,0,0,0.8)';tCtx.shadowBlur=4;
+    tCtx.beginPath();tCtx.arc(x,y,13+pulse*5,0,Math.PI*2);tCtx.strokeStyle=c+'55';tCtx.lineWidth=1.5;tCtx.stroke();
+    tCtx.beginPath();tCtx.arc(x,y,10,0,Math.PI*2);tCtx.fillStyle=c;tCtx.fill();tCtx.strokeStyle='rgba(255,255,255,0.8)';tCtx.lineWidth=1.5;tCtx.stroke();
+    tCtx.font='bold 10px "Bebas Neue",sans-serif';tCtx.fillStyle='#000';tCtx.textAlign='center';tCtx.textBaseline='middle';tCtx.fillText(i+1,x,y+1);
+    tCtx.font='bold 9px "Space Mono",monospace';tCtx.fillStyle=c;tCtx.textAlign='left';tCtx.textBaseline='alphabetic';
+    tCtx.fillText(hs.name&&hs.name.length>18?hs.name.substr(0,18)+'…':hs.name||'',x+13,y-2);
+    tCtx.font='8px "Space Mono",monospace';tCtx.fillStyle='rgba(255,255,255,0.8)';tCtx.fillText(hs.location||'',x+13,y+9);
+    tCtx.shadowBlur=0;tCtx.restore();
   });
 }
 
@@ -1716,8 +2030,8 @@ function draw(){
 // ANIMATION LOOP (30fps cap)
 // ═══════════════════════════════════════════
 function loop(ts){
-  if(ts-lastFrameTime>33){
-    lastFrameTime=ts;animT+=0.016;
+  if(ts-lastFrameTime>50){
+    lastFrameTime=ts;animT+=0.008; // slower animation = less GPU
     draw();
     // Redraw satellite if viewport changed
     const b=getViewBounds();
@@ -1729,6 +2043,10 @@ function loop(ts){
       Object.keys(satCache).forEach(k=>{satCache[k].key='';satCache[k].img=null;});
       // Clear satellite canvas immediately — better blank than misaligned
       satCtx.clearRect(0,0,satCvs.width,satCvs.height);
+      // Invalidate MLD, FSLE, and NOAA chart caches
+      invalidateMLD();
+      fsleCacheCanvas=null;
+      noaaChartCache={img:null,key:''};
       // Re-run eddy detection for new viewport
       if(currentGrid.length>=6) detectEddies();
       // Debounce: only start loading after panning settles (300ms)
@@ -1825,9 +2143,9 @@ async function fetchCurrentData(){
   const spacingMi = Math.round(spacing * 69);
   const total = pts.length;
   
-  const zoomLabel = vp.scale>=3.0 ? `MICRO ${spacing}°(~${spacingMi}mi)` :
-                    vp.scale>=1.5 ? `LOCAL ${spacing}°(~${spacingMi}mi)` :
-                    vp.scale>=0.8 ? `REGIONAL ${spacing}°(~${spacingMi}mi)` :
+  const zoomLabel = vp.scale>=5.0 ? `MICRO ${spacing}°(~${spacingMi}mi)` :
+                    vp.scale>=3.0 ? `LOCAL ${spacing}°(~${spacingMi}mi)` :
+                    vp.scale>=2.0 ? `REGIONAL ${spacing}°(~${spacingMi}mi)` :
                                     `COAST ${spacing}°(~${spacingMi}mi)`;
   
   setDS('loading',`${zoomLabel} · ${total} pts`);setFill(0);
@@ -1898,8 +2216,19 @@ async function fetchAllData(){
 // ═══════════════════════════════════════════
 // INTERACTION
 // ═══════════════════════════════════════════
-function zoom(f){vp.scale=Math.max(0.4,Math.min(10,vp.scale*f));}
-cvs.addEventListener('wheel',e=>{e.preventDefault();zoom(e.deltaY<0?1.15:0.87);},{passive:false});
+function zoom(f){vp.scale=Math.max(1.2,Math.min(12,vp.scale*f));} // min 1.2 = regional view only
+
+function clampViewport(){
+  // Keep viewport within east coast coverage area
+  const dlat=BASE_DLAT/vp.scale, dlng=BASE_DLNG/vp.scale;
+  vp.lat = Math.max(23.5+dlat, Math.min(42.5-dlat, vp.lat));
+  vp.lng = Math.max(-85.0+dlng, Math.min(-65.0-dlng, vp.lng));
+}
+cvs.addEventListener('wheel',e=>{
+  e.preventDefault();
+  zoom(e.deltaY<0?1.15:0.87);
+  clampViewport();
+},{passive:false});
 cvs.addEventListener('mousedown',e=>{drag={x:e.clientX,y:e.clientY,lat:vp.lat,lng:vp.lng};});
 cvs.addEventListener('mousemove',e=>{
   if(drag){
@@ -1934,7 +2263,7 @@ function toggleLayer(key){
   document.getElementById('tog-'+key).classList.toggle('on',layers[key]);
   document.getElementById('btn-'+key).classList.toggle('active',layers[key]);
   // Auto-fetch MLD data when toggled on for first time
-  if(key==='mld' && layers.mld && !mldGrid.length) fetchMLD();
+  if(key==='mld'){ invalidateMLD(); if(layers.mld && !mldGrid.length) fetchMLD(); }
 }
 function panTo(lat,lng){vp.lat=lat+0.05;vp.lng=lng+0.25;vp.scale=Math.max(vp.scale,1.5);}
 
@@ -1990,6 +2319,35 @@ async function runAnalysis(){
     return `HYCOM MIXED LAYER DEPTH (thermocline proxy): avg=${avg}m range=${mn}–${mx}m. ${shallow} pts with shallow MLD<40m (upwelling zones, baitfish habitat). Shallow MLD = thermocline near surface = better fishing.`;
   })() : 'HYCOM MLD: not loaded';
 
+  // FSLE / ocean front context for AI
+  const fsleContext = (layers.fsle && currentGrid.length>8) ? (() => {
+    // Recompute strain stats for AI (lightweight)
+    const snapDeg=0.25;
+    const gridMap={};
+    for(const pt of currentGrid){
+      if(pt.u==null||pt.v==null) continue;
+      const key=`${Math.round(pt.lat/snapDeg)},${Math.round(pt.lng/snapDeg)}`;
+      gridMap[key]=pt;
+    }
+    let strongFronts=0, maxStrain=0;
+    const b=getViewBounds();
+    for(const pt of currentGrid){
+      if(pt.lat<b.south||pt.lat>b.north||pt.lng<b.west||pt.lng>b.east) continue;
+      const dlat=snapDeg,dlng=snapDeg;
+      const pN=gridMap[`${Math.round((pt.lat+dlat)/snapDeg)},${Math.round(pt.lng/snapDeg)}`];
+      const pS=gridMap[`${Math.round((pt.lat-dlat)/snapDeg)},${Math.round(pt.lng/snapDeg)}`];
+      const pE=gridMap[`${Math.round(pt.lat/snapDeg)},${Math.round((pt.lng+dlng)/snapDeg)}`];
+      const pW=gridMap[`${Math.round(pt.lat/snapDeg)},${Math.round((pt.lng-dlng)/snapDeg)}`];
+      if(!pN||!pS||!pE||!pW) continue;
+      const dudx=(pE.u-pW.u)/(2*dlng),dudy=(pN.u-pS.u)/(2*dlat);
+      const dvdx=(pE.v-pW.v)/(2*dlng),dvdy=(pN.v-pS.v)/(2*dlat);
+      const strain=Math.sqrt(dudx*dudx+dvdy*dvdy+2*((dudy+dvdx)/2)**2);
+      if(strain>maxStrain)maxStrain=strain;
+      if(strain>maxStrain*0.6)strongFronts++;
+    }
+    return `OCEAN FRONTS (FSLE/Lagrangian strain): ${strongFronts} strong convergence zones detected in viewport. Max strain rate=${maxStrain.toFixed(4)}/deg. High-strain zones are Lagrangian Coherent Structures — ocean walls where baitfish and plankton concentrate. These are prime ambush points for marlin, tuna, and wahoo. Cross these fronts perpendicular when trolling.`;
+  })() : 'FSLE/Ocean fronts: layer not active';
+
   const eddyContext=detectedEddies.length>0
     ?'EDDIES: '+detectedEddies.map(e=>`${e.sense} eddy @${e.lat.toFixed(3)}N/${Math.abs(e.lng).toFixed(3)}W ~${(e.radius_deg*69).toFixed(0)}mi ${e.sense==='CCW'?'cyclonic/upwelling':'anticyclonic/warm-core'}`).join('; ')
     :'No significant eddies detected.';
@@ -2017,7 +2375,7 @@ ${satContext}\n\n${speciesContext}
 LIVE OCEAN CURRENTS:
 ${curSummary}
 
-${eddyContext}\n\n${mldContext}\n\nCHLOROPHYLL MULTI-DAY TREND:\n${chlTrendText}
+${eddyContext}\n\n${fsleContext}\n\n${mldContext}\n\nCHLOROPHYLL MULTI-DAY TREND:\n${chlTrendText}
 
 DEPTH: Continental shelf averages 3-8mi to 30ft, 8-15mi to 100ft, 15-25mi to 200ft, 25-40mi to 1000ft depending on location. Shelf break varies: narrow off NC/VA (~20mi), wider off FL (~40mi). Month: ${month}.
 
@@ -2110,6 +2468,7 @@ function renderResults(data){
 // ═══════════════════════════════════════════
 window.addEventListener('load',()=>{
   initSpeciesGrid();
+  initRegions();
   setTimeout(()=>{
     fetchCurrentData();
     loadAllSatellite();
