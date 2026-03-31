@@ -535,7 +535,7 @@ function resetScales(){
   document.getElementById('chl-boost').value='1';
   updateScales();
 }
-const layers    = {cur:false, edy:false, dep:false, gs:false, mld:false, fsle:false};
+const layers    = {cur:false, edy:false, dep:false, gs:false, fsle:false};
 
 // Date state — default to 3 days ago (most reliable satellite data)
 const today = new Date();
@@ -674,7 +674,7 @@ function resize(){
   if(W < 10 || H < 10) return; // not laid out yet
   cvs.width    = W; cvs.height    = H;
   satCvs.width = W; satCvs.height = H;
-  bgCacheKey=''; contourCacheKey=''; mldCacheCanvas=null;
+  bgCacheKey=''; contourCacheKey='';
   Object.keys(satCache).forEach(k=>satCache[k].key='');
 }
 window.addEventListener('resize', resize);
@@ -824,12 +824,12 @@ async function loadSatLayer(layerKey, dateOverride){
 }
 
 async function loadAllSatellite(){
-  // Only load layers that are actually on
   const anyOn = Object.values(satLayers).some(Boolean) || noaaChartOn;
-  if(!anyOn) return;
+  if(!anyOn){ drawSatellite(); return; }
+  const noaaTask = (noaaChartOn && !noaaChartCache.img) ? loadNOAAChart() : Promise.resolve();
   await Promise.all([
     ...Object.keys(satLayers).filter(k=>satLayers[k]).map(k=>loadSatLayer(k)),
-    noaaChartOn ? loadNOAAChart() : Promise.resolve()
+    noaaTask
   ]);
   drawSatellite();
 }
@@ -1030,180 +1030,6 @@ function computeAndDrawFSLE(){
   ctx.restore();
 }
 
-function drawMLD(targetCanvas){
-  targetCanvas = targetCanvas || cvs;
-  const W=targetCanvas.width, H=targetCanvas.height;
-  const tCtx = targetCanvas.getContext('2d');
-  tCtx.clearRect(0,0,W,H);
-
-  // ── If we have the raw WMS image, draw it directly ──
-  if(mldGrid._img){
-    tCtx.globalAlpha=0.72;
-    tCtx.drawImage(mldGrid._img,0,0,W,H);
-    tCtx.globalAlpha=1.0;
-
-    // Value labels when zoomed in
-    if(vp.scale>2.0){
-      tCtx.font='8px "Space Mono",monospace';
-      tCtx.textAlign='center';
-      for(const pt of mldGrid){
-        const[x,y]=geoToCanvas(pt.lat,pt.lng);
-        if(x<20||x>W-20||y<20||y>H-20) continue;
-        tCtx.fillStyle='rgba(255,255,255,0.9)';
-        tCtx.shadowColor='rgba(0,0,0,0.8)';tCtx.shadowBlur=2;
-        tCtx.fillText(Math.round(pt.mld_m)+'m',x,y+3);
-        tCtx.shadowBlur=0;
-      }
-      tCtx.textAlign='left';
-    }
-
-    // Legend
-    tCtx.shadowColor='rgba(0,0,0,0.9)';tCtx.shadowBlur=4;
-    tCtx.font='bold 9px "Space Mono",monospace';
-    tCtx.fillStyle='rgba(255,255,255,0.95)';
-    tCtx.fillText('MIXED LAYER DEPTH · CMEMS (mlotst)',10,30);
-    tCtx.shadowBlur=0;
-    const lx=10,ly=42,lw=180;
-    const grad=tCtx.createLinearGradient(lx,0,lx+lw,0);
-    grad.addColorStop(0,'rgba(68,1,84,0.95)');    // viridis: deep purple = shallow
-    grad.addColorStop(0.25,'rgba(59,82,139,0.95)');
-    grad.addColorStop(0.5,'rgba(33,145,140,0.95)');
-    grad.addColorStop(0.75,'rgba(94,201,98,0.95)');
-    grad.addColorStop(1,'rgba(253,231,37,0.95)'); // yellow = deep MLD
-    tCtx.fillStyle=grad;
-    tCtx.fillRect(lx,ly,lw,7);
-    tCtx.font='7px "Space Mono",monospace';
-    tCtx.fillStyle='rgba(255,255,255,0.95)';
-    tCtx.shadowColor='rgba(0,0,0,0.8)';tCtx.shadowBlur=2;
-    tCtx.fillText('0m (shallow)',lx,ly+16);
-    tCtx.fillText('~100m',lx+lw/2-14,ly+16);
-    tCtx.fillText('200m+ (deep)',lx+lw-48,ly+16);
-    tCtx.shadowBlur=0;
-    tCtx.restore();
-    return;
-  }
-
-  // ── Fallback: interpolated heatmap from sampled points ──
-  const STEP = Math.max(3, Math.round(Math.min(W,H)/180)); // ~180 samples per axis
-  const offW = Math.ceil(W/STEP), offH = Math.ceil(H/STEP);
-  const offCvs = document.createElement('canvas');
-  offCvs.width=offW; offCvs.height=offH;
-  const off = offCvs.getContext('2d');
-  const imgData = off.createImageData(offW, offH);
-  const d = imgData.data;
-
-  const grid = mldGrid;
-  // Pre-compute geo coords for each grid point for fast lookup
-  const gridXY = grid.map(pt=>{
-    const[x,y]=geoToCanvas(pt.lat,pt.lng);
-    return{x,y,anom:pt.anom};
-  });
-
-  for(let py=0; py<offH; py++){
-    for(let px=0; px<offW; px++){
-      // Skip land using a fast check
-      const cx=px*STEP+STEP/2, cy=py*STEP+STEP/2;
-      const [lat,lng] = canvasToGeo(cx,cy);
-      const depth = depthAt(lat,lng);
-      if(depth!==null && depth<2){ 
-        const i=(py*offW+px)*4;
-        d[i+3]=0; continue; 
-      }
-
-      // Fast IDW in PIXEL space (no trig needed)
-      let wSum=0, vSum=0, minDist=Infinity;
-      for(const pt of gridXY){
-        const dx=pt.x-cx, dy=pt.y-cy;
-        const dist2=dx*dx+dy*dy;
-        if(dist2<minDist) minDist=dist2;
-        const w=1/Math.max(1,dist2);
-        wSum+=w; vSum+=pt.anom*w;
-      }
-      if(minDist>200*200){ const i=(py*offW+px)*4; d[i+3]=0; continue; } // too far
-      const anom=vSum/wSum;
-
-      // Map anomaly to color
-      // -0.3m = deep blue (upwelling), 0 = white, +0.3m = deep red (warm core)
-      const t=(anom+0.30)/0.60; // normalize to 0-1
-      const tc=Math.max(0,Math.min(1,t));
-      let r2,g2,b2;
-      if(tc<0.25){
-        // Deep blue → blue
-        const f=tc/0.25;
-        r2=0; g2=Math.round(80+80*f); b2=255;
-      } else if(tc<0.45){
-        // Blue → light blue
-        const f=(tc-0.25)/0.20;
-        r2=Math.round(160*f); g2=Math.round(160+40*f); b2=255;
-      } else if(tc<0.55){
-        // Light blue → white → light yellow
-        const f=(tc-0.45)/0.10;
-        r2=Math.round(160+95*f); g2=Math.round(200+55*f); b2=Math.round(255-55*f);
-      } else if(tc<0.70){
-        // Light yellow → orange
-        const f=(tc-0.55)/0.15;
-        r2=255; g2=Math.round(255-110*f); b2=Math.round(200-200*f);
-      } else {
-        // Orange → deep red
-        const f=(tc-0.70)/0.30;
-        r2=255; g2=Math.round(145-145*f); b2=0;
-      }
-
-      const i=(py*offW+px)*4;
-      d[i]=r2; d[i+1]=g2; d[i+2]=b2; d[i+3]=Math.round(168); // 66% opacity
-    }
-  }
-
-  off.putImageData(imgData,0,0);
-
-  // Upscale smoothly to full canvas with slight blur for smooth blending
-  tCtx.imageSmoothingEnabled=true;
-  tCtx.imageSmoothingQuality='high';
-  tCtx.drawImage(offCvs,0,0,W,H);
-  tCtx.imageSmoothingEnabled=false;
-
-  // SSH value labels when zoomed in
-  if(vp.scale>2.0){
-    tCtx.font='8px "Space Mono",monospace';
-    tCtx.textAlign='center';
-    for(const pt of grid){
-      const[x,y]=geoToCanvas(pt.lat,pt.lng);
-      if(x<20||x>W-20||y<20||y>H-20) continue;
-      tCtx.fillStyle='rgba(0,0,0,0.75)';
-      tCtx.shadowColor='rgba(255,255,255,0.6)';tCtx.shadowBlur=2;
-      tCtx.fillText((pt.anom>=0?'+':'')+pt.anom.toFixed(2)+'m',x,y+3);
-      tCtx.shadowBlur=0;
-    }
-    tCtx.textAlign='left';
-  }
-
-  // Legend
-  tCtx.shadowColor='rgba(0,0,0,0.9)';tCtx.shadowBlur=4;
-  tCtx.font='bold 9px "Space Mono",monospace';
-  tCtx.fillStyle='rgba(255,255,255,0.95)';
-  tCtx.fillText('SSH / THERMOCLINE (HYCOM)',10,30);
-  tCtx.shadowBlur=0;
-
-  const lx=10,ly=42,lw=170;
-  const grad=tCtx.createLinearGradient(lx,0,lx+lw,0);
-  grad.addColorStop(0,'rgba(0,80,255,0.95)');
-  grad.addColorStop(0.35,'rgba(160,200,255,0.95)');
-  grad.addColorStop(0.5,'rgba(255,255,200,0.95)');
-  grad.addColorStop(0.70,'rgba(255,145,0,0.95)');
-  grad.addColorStop(1,'rgba(255,0,0,0.95)');
-  tCtx.fillStyle=grad;
-  tCtx.fillRect(lx,ly,lw,7);
-  tCtx.strokeStyle='rgba(255,255,255,0.5)';tCtx.lineWidth=0.5;
-  tCtx.strokeRect(lx,ly,lw,7);
-  tCtx.font='7px "Space Mono",monospace';
-  tCtx.fillStyle='rgba(255,255,255,0.95)';
-  tCtx.shadowColor='rgba(0,0,0,0.8)';tCtx.shadowBlur=2;
-  tCtx.fillText('↑ Upwelling',lx,ly+16);
-  tCtx.fillText('Neutral',lx+lw/2-14,ly+16);
-  tCtx.fillText('Warm Core ↓',lx+lw-44,ly+16);
-  tCtx.shadowBlur=0;
-
-}
 
 
 // ── Multi-day chlorophyll trend analysis ──
@@ -1887,10 +1713,13 @@ function loop(ts){
         Object.keys(satCache).forEach(k=>{satCache[k].key='';satCache[k].img=null;});
         satCtx.clearRect(0,0,satCvs.width,satCvs.height);
         fsleCacheCanvas=null;
-        noaaChartCache={img:null,key:''};
+        const nb2=getViewBounds(), lb=loop._lastNoaaB||{};
+        if(Math.abs((nb2.west)-(lb.west||99))>0.8 || Math.abs((nb2.north)-(lb.north||99))>0.8){
+          noaaChartCache={img:null,key:''}; loop._lastNoaaB=nb2;
+        }
         if(currentGrid.length>=6) detectEddies();
         loadAllSatellite();
-      }, 500);
+      }, 600);
     }
     // Auto-refetch currents when zoom tier changes (coarse→micro)
     const newTier = getGridSpacing();
