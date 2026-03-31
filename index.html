@@ -279,12 +279,12 @@ input[type=range].rng.sst-rng::-moz-range-thumb{background:var(--hot);}
 
       <!-- SST source picker grid -->
       <div id="sst-src-grid" style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:3px;margin:4px 0 2px;padding:0 2px">
-        <button class="src-btn active" id="sstsrc-mur"  onclick="setSstSource('mur')"  title="MUR L4 GHRSST · 1km · daily gap-filled · always full coverage">MUR L4</button>
-        <button class="src-btn"        id="sstsrc-n20"  onclick="setSstSource('n20')"  title="NOAA-20 VIIRS · 750m · daytime passes · NRT">N20 Day</button>
-        <button class="src-btn"        id="sstsrc-n20n" onclick="setSstSource('n20n')" title="NOAA-20 VIIRS · 750m · nighttime · cleaner signal">N20 Night</button>
-        <button class="src-btn"        id="sstsrc-n21"  onclick="setSstSource('n21')"  title="NOAA-21 VIIRS · 750m · daytime · Mar 2023–now">N21 Day</button>
-        <button class="src-btn"        id="sstsrc-snpp" onclick="setSstSource('snpp')" title="Suomi-NPP VIIRS · 750m · daytime · 2012–now">S-NPP</button>
-        <button class="src-btn"        id="sstsrc-modA" onclick="setSstSource('modA')" title="MODIS Aqua · 4km · nighttime · 2002–now">MODIS Aq</button>
+        <button class="src-btn active" id="sstsrc-mur"   onclick="setSstSource('mur')"   title="MUR L4 GHRSST · 1km · daily gap-filled · always full coverage">MUR L4</button>
+        <button class="src-btn"        id="sstsrc-snpp"  onclick="setSstSource('snpp')"  title="Suomi-NPP VIIRS · 750m · daytime swath · 2012–now">S-NPP Day</button>
+        <button class="src-btn"        id="sstsrc-snppN" onclick="setSstSource('snppN')" title="Suomi-NPP VIIRS · 750m · nighttime · cleaner IR signal">S-NPP Night</button>
+        <button class="src-btn"        id="sstsrc-n20"   onclick="setSstSource('n20')"   title="NOAA-20 VIIRS · 750m · daytime · NRT">N20 Day</button>
+        <button class="src-btn"        id="sstsrc-n20n"  onclick="setSstSource('n20n')"  title="NOAA-20 VIIRS · 750m · nighttime · cleaner IR signal">N20 Night</button>
+        <button class="src-btn"        id="sstsrc-n21"   onclick="setSstSource('n21')"   title="NOAA-21 VIIRS · 750m · daytime · Mar 2023–now">N21 Day</button>
       </div>
       <div id="sst-src-note" style="font-family:'Space Mono';font-size:7px;color:var(--muted);padding:0 2px 4px;line-height:1.6">Daily gap-filled · always full coverage ✓</div>
 
@@ -650,12 +650,12 @@ let activeChlSrc = 'n20'; // currently selected source
 // VIIRS/MODIS L2 = raw passes (cloud gaps, near-real-time, ~750m-1km native)
 // OSTIA = UK Met Office operational analysis (smoothed, 5km, always has data)
 const SST_SOURCES = {
-  mur:   { layer:'GHRSST_L4_MUR_Sea_Surface_Temperature',           label:'MUR L4',     res:'1km',  note:'Daily gap-filled · 1-day lag · always full coverage ✓' },
-  n20:   { layer:'VIIRS_NOAA20_Sea_Surface_Temperature_Day',        label:'NOAA-20 Day', res:'750m', note:'VIIRS NOAA-20 · 750m · daytime passes · NRT' },
-  n20n:  { layer:'VIIRS_NOAA20_Sea_Surface_Temperature_Night',      label:'NOAA-20 Night',res:'750m',note:'VIIRS NOAA-20 · 750m · nighttime passes · cleaner signal' },
-  n21:   { layer:'VIIRS_NOAA21_Sea_Surface_Temperature_Day',        label:'NOAA-21 Day', res:'750m', note:'VIIRS NOAA-21 · 750m · daytime passes · NRT' },
-  snpp:  { layer:'VIIRS_SNPP_Sea_Surface_Temperature_Day',          label:'S-NPP Day',   res:'750m', note:'VIIRS Suomi-NPP · 750m · daytime passes' },
-  modA:  { layer:'MODIS_Aqua_L2_SST_Nighttime_4km_Night',          label:'MODIS Aqua',  res:'4km',  note:'MODIS Aqua · 4km · nighttime · 2002–now' },
+  mur:   { layer:'GHRSST_L4_MUR_Sea_Surface_Temperature',    label:'MUR L4',      res:'1km',  note:'Daily gap-filled composite · always full coverage ✓' },
+  snpp:  { layer:'VIIRS_SNPP_L2_Sea_Surface_Temp_Day',       label:'S-NPP Day',   res:'750m', note:'VIIRS Suomi-NPP · 750m · daytime swath · 2012–now' },
+  snppN: { layer:'VIIRS_SNPP_L2_Sea_Surface_Temp_Night',     label:'S-NPP Night', res:'750m', note:'VIIRS Suomi-NPP · 750m · nighttime · cleaner IR signal' },
+  n20:   { layer:'VIIRS_NOAA20_L2_Sea_Surface_Temp_Day',     label:'N20 Day',     res:'750m', note:'VIIRS NOAA-20 · 750m · daytime swath · NRT' },
+  n20n:  { layer:'VIIRS_NOAA20_L2_Sea_Surface_Temp_Night',   label:'N20 Night',   res:'750m', note:'VIIRS NOAA-20 · 750m · nighttime · cleaner IR signal' },
+  n21:   { layer:'VIIRS_NOAA21_L2_Sea_Surface_Temp_Day',     label:'N21 Day',     res:'750m', note:'VIIRS NOAA-21 · 750m · daytime swath · Mar 2023–now' },
 };
 let activeSstSrc = 'mur'; // currently selected source
 
