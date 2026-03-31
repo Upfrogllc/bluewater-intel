@@ -1001,51 +1001,47 @@ function toggleNoaaChart(){
 
 // Apply gamma + range remapping to a canvas image
 // gamma < 1 = compress highlights / boost darks; gamma > 1 = stretch highlights
-// ── rgb→hue (0-360) helper ──────────────────────────────────────────
-function rgbToHue(r,g,b){
-  const rn=r/255,gn=g/255,bn=b/255;
+// ── Convert RGB → HSV ─────────────────────────────────────────────
+function rgbToHsv(r,g,b){
+  const rn=r/255, gn=g/255, bn=b/255;
   const mx=Math.max(rn,gn,bn), mn=Math.min(rn,gn,bn), d=mx-mn;
-  if(d<0.01) return -1; // achromatic (grey/white/black) → ignore
   let h=0;
-  if(mx===rn)      h=((gn-bn)/d+6)%6;
-  else if(mx===gn) h=(bn-rn)/d+2;
-  else             h=(rn-gn)/d+4;
-  return h*60;
+  if(d>0.001){
+    if(mx===rn)      h=((gn-bn)/d+6)%6;
+    else if(mx===gn) h=(bn-rn)/d+2;
+    else             h=(rn-gn)/d+4;
+    h*=60;
+  }
+  return [h, mx>0?d/mx:0, mx]; // [hue 0-360, sat 0-1, val 0-1]
 }
 
-// ── pixel position (0-1) within GIBS SST rainbow colormap ───────────
-// GIBS SST colormap: blue(cold)→cyan→green→yellow→red(hot)
-// Hue progression: ~240° (blue) → 180° (cyan) → 120° (green) → 60° (yellow) → 0°/360° (red)
-// That's hue DECREASING from 240 to 0 as temp increases.
-// Full physical range ≈ 0–35°C = 32–95°F
-const SST_HUE_COLD = 240; // hue at coldest (0°C / 32°F)
-const SST_HUE_HOT  = 0;   // hue at hottest (35°C / 95°F)
-const SST_PHYS_MIN_F = 32;
-const SST_PHYS_MAX_F = 95;
-
-function sstHueToF(hue){
-  // hue 240→0 maps to 32→95°F
-  const pos = (SST_HUE_COLD - hue) / (SST_HUE_COLD - SST_HUE_HOT); // 0=cold,1=hot
-  return SST_PHYS_MIN_F + pos * (SST_PHYS_MAX_F - SST_PHYS_MIN_F);
+// ── Convert HSV → RGB ─────────────────────────────────────────────
+function hsvToRgb(h,s,v){
+  const c=v*s, x=c*(1-Math.abs((h/60)%2-1)), m=v-c;
+  let r=0,g=0,b=0;
+  if(h<60){r=c;g=x;}else if(h<120){r=x;g=c;}else if(h<180){g=c;b=x;}
+  else if(h<240){g=x;b=c;}else if(h<300){r=x;b=c;}else{r=c;b=x;}
+  return [Math.round((r+m)*255), Math.round((g+m)*255), Math.round((b+m)*255)];
 }
 
-// ── pixel position within GIBS CHL rainbow colormap ────────────────
-// GIBS CHL colormap: purple(low)→blue→cyan→green→yellow→red(high)
-// Hue: ~280°(purple) → 240°(blue) → 180°(cyan) → 120°(green) → 60°(yellow) → 0°(red)
-// Physical range ≈ 0.01–20 mg/m³ (log scale: log10 = -2 to +1.3)
-const CHL_HUE_LOW  = 280;
-const CHL_HUE_HIGH = 0;
-const CHL_PHYS_MIN_LOG = -2.0;
-const CHL_PHYS_MAX_LOG =  1.3;
+// ── GIBS colormap hue ranges ───────────────────────────────────────
+// SST MUR: blue(240°) cold → red(0°/360°) hot.  Physical: 32–95°F
+// CHL VIIRS: purple(280°) low → red(0°) high.  Physical log: -2 to +1.3
+const SST_PHYS_MIN_F   = 32,  SST_PHYS_MAX_F   = 95;
+const SST_HUE_COLD     = 240, SST_HUE_HOT      = 0;
+const CHL_PHYS_MIN_LOG = -2.0, CHL_PHYS_MAX_LOG = 1.3;
+const CHL_HUE_LOW      = 280, CHL_HUE_HIGH     = 0;
 
-function chlHueToLog(hue){
-  let h = hue;
-  if(h > CHL_HUE_LOW) h = CHL_HUE_LOW;
-  const pos = (CHL_HUE_LOW - h) / (CHL_HUE_LOW - CHL_HUE_HIGH);
-  return CHL_PHYS_MIN_LOG + pos * (CHL_PHYS_MAX_LOG - CHL_PHYS_MIN_LOG);
-}
+function sstFtoPos(f){ return (f - SST_PHYS_MIN_F) / (SST_PHYS_MAX_F - SST_PHYS_MIN_F); }
+function sstHueToPos(h){ return (SST_HUE_COLD - h) / SST_HUE_COLD; } // 0=cold,1=hot
+function posToChlHue(p){ return CHL_HUE_LOW - p*(CHL_HUE_LOW - CHL_HUE_HIGH); }
+function posToSstHue(p){ return SST_HUE_COLD - p*SST_HUE_COLD; }
 
-// ── Main image filter: gamma + alpha + range masking ───────────────
+// ── Main image filter: gamma + alpha + colormap stretch ───────────
+// layerKey = 'sst' | 'chl' | undefined
+// For SST/CHL: remaps pixel hues so the user-selected range fills the
+// full colormap (blue→red), like Photoshop "Levels" but for hue.
+// Gamma still applies on top of the hue remap.
 function applyImageFilter(srcImg, W, H, gamma, alpha, layerKey){
   const tmp = document.createElement('canvas'); tmp.width=W; tmp.height=H;
   const tc  = tmp.getContext('2d');
@@ -1054,42 +1050,73 @@ function applyImageFilter(srcImg, W, H, gamma, alpha, layerKey){
   const id = tc.getImageData(0,0,W,H);
   const d  = id.data;
 
-  // Build gamma LUT
+  const doSst = layerKey==='sst';
+  const doChl = layerKey==='chl';
+  const doRemap = doSst || doChl;
+
+  // Gamma LUT (applied after hue remap)
+  const g = gamma || 1.0;
   const lut = new Uint8Array(256);
-  const g = (gamma && gamma !== 1.0) ? gamma : 1.0;
-  for(let i=0;i<256;i++) lut[i] = g===1.0 ? i : Math.round(Math.pow(i/255, 1/g)*255);
+  for(let i=0;i<256;i++) lut[i] = g===1.0 ? i : Math.round(Math.pow(i/255,1/g)*255);
 
-  // Range bounds from satRanges
-  const doSstMask = layerKey==='sst';
-  const doChlMask = layerKey==='chl';
-  const sstMin = satRanges.sst.minF;
-  const sstMax = satRanges.sst.maxF;
-  const chlMin = satRanges.chl.minLog;
-  const chlMax = satRanges.chl.maxLog;
+  if(doSst){
+    // Map user range [minF, maxF] → positions [pMin, pMax] in 0-1 colormap space
+    const pMin = sstFtoPos(satRanges.sst.minF);
+    const pMax = sstFtoPos(satRanges.sst.maxF);
+    const pRange = Math.max(0.01, pMax - pMin);
 
-  for(let i=0;i<d.length;i+=4){
-    if(d[i+3]<4) continue;
+    for(let i=0;i<d.length;i+=4){
+      if(d[i+3]<4) continue;
+      const [h,s,v] = rgbToHsv(d[i],d[i+1],d[i+2]);
+      if(s < 0.15) continue; // skip grey/white/black (land, clouds, no-data)
 
-    // Range masking
-    if(doSstMask || doChlMask){
-      const hue = rgbToHue(d[i],d[i+1],d[i+2]);
-      if(hue >= 0){ // skip achromatic pixels (land, missing data)
-        if(doSstMask){
-          const tempF = sstHueToF(hue);
-          if(tempF < sstMin || tempF > sstMax){ d[i+3]=0; continue; }
-        }
-        if(doChlMask){
-          const logVal = chlHueToLog(hue);
-          if(logVal < chlMin || logVal > chlMax){ d[i+3]=0; continue; }
-        }
-      }
+      // Where is this pixel's hue in the original full colormap? (0=cold, 1=hot)
+      const origPos = sstHueToPos(h);
+
+      // Remap: stretch origPos from [pMin,pMax] to [0,1]
+      const newPos = Math.max(0, Math.min(1, (origPos - pMin) / pRange));
+
+      // Convert new position back to hue
+      const newHue = posToSstHue(newPos);
+      const [r2,g2,b2] = hsvToRgb(newHue, s, v);
+
+      d[i]   = lut[r2];
+      d[i+1] = lut[g2];
+      d[i+2] = lut[b2];
     }
+  } else if(doChl){
+    // CHL: user range is log10 [minLog, maxLog]
+    // Map those to positions [pMin,pMax] in colormap
+    const fullRange = CHL_PHYS_MAX_LOG - CHL_PHYS_MIN_LOG;
+    const pMin = (satRanges.chl.minLog - CHL_PHYS_MIN_LOG) / fullRange;
+    const pMax = (satRanges.chl.maxLog - CHL_PHYS_MIN_LOG) / fullRange;
+    const pRange = Math.max(0.01, pMax - pMin);
 
-    // Gamma
+    for(let i=0;i<d.length;i+=4){
+      if(d[i+3]<4) continue;
+      const [h,s,v] = rgbToHsv(d[i],d[i+1],d[i+2]);
+      if(s < 0.15) continue;
+
+      // Hue → position in 0-1 colormap (0=low chl, 1=high)
+      let hClamped = Math.min(h, CHL_HUE_LOW);
+      const origPos = (CHL_HUE_LOW - hClamped) / CHL_HUE_LOW;
+
+      // Stretch to fill full range
+      const newPos = Math.max(0, Math.min(1, (origPos - pMin) / pRange));
+      const newHue = posToChlHue(newPos);
+      const [r2,g2,b2] = hsvToRgb(newHue, s, v);
+
+      d[i]   = lut[r2];
+      d[i+1] = lut[g2];
+      d[i+2] = lut[b2];
+    }
+  } else {
+    // TC or other: just gamma
     if(g !== 1.0){
-      d[i]   = lut[d[i]];
-      d[i+1] = lut[d[i+1]];
-      d[i+2] = lut[d[i+2]];
+      for(let i=0;i<d.length;i+=4){
+        if(d[i+3]<4) continue;
+        d[i]=lut[d[i]]; d[i+1]=lut[d[i+1]]; d[i+2]=lut[d[i+2]];
+      }
     }
   }
 
