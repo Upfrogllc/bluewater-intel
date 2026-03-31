@@ -318,6 +318,15 @@ input[type=range].rng.sst-rng::-moz-range-thumb{background:var(--hot);}
         <div class="tog on" id="tog-gs"></div>
       </div>
 
+      <div class="layer-btn active" id="btn-me" onclick="toggleLayer('me')">
+        <div class="lb-left">
+          <div class="lb-dot" style="background:#ff6600;box-shadow:0 0 5px #ff660066"></div>
+          <span>Micro-Eddies &lt;5mi</span>
+        </div>
+        <span class="lb-src">Sat</span>
+        <div class="tog on" id="tog-me"></div>
+      </div>
+
       <div class="layer-btn active" id="btn-frt" onclick="toggleLayer('frt')">
         <div class="lb-left">
           <div class="lb-dot" style="background:#ff44ff;box-shadow:0 0 5px #ff44ff66"></div>
@@ -361,6 +370,26 @@ input[type=range].rng.sst-rng::-moz-range-thumb{background:var(--hot);}
     <div class="sb-sec">
       <div class="sb-ttl" style="margin-bottom:7px">Detected Eddies</div>
       <div id="eddy-list" style="font-size:9px;color:var(--muted);font-family:'Space Mono'">Load current data to detect eddies</div>
+    </div>
+
+    <div class="sb-sec">
+      <div class="sb-ttl" style="margin-bottom:4px">Micro-Eddies <span style="font-family:'Space Mono';font-size:8px;color:var(--warm);font-weight:normal">&lt;5mi · Sat</span></div>
+      <div style="font-family:'Space Mono';font-size:8px;color:var(--muted);margin-bottom:6px;line-height:1.6">
+        <span style="color:#ff6600">⬡</span> Warm core (CW) &nbsp;
+        <span style="color:#00ccff">⬡</span> Cool core (CCW)<br>
+        Detected from satellite gradients
+      </div>
+      <div class="rng-row">
+        <span class="rng-tag">sens</span>
+        <input type="range" class="rng" id="me-sens" min="1" max="10" step="0.5" value="3.5" oninput="document.getElementById('me-sens-lbl').textContent=parseFloat(this.value).toFixed(1);microEddies=[];detectedFronts=null;">
+        <span class="rng-vals" id="me-sens-lbl">3.5</span>
+      </div>
+      <div class="rng-row">
+        <span class="rng-tag">size</span>
+        <input type="range" class="rng" id="me-maxr" min="4" max="40" step="2" value="14" oninput="document.getElementById('me-maxr-lbl').textContent=Math.round(this.value*0.3)+'mi';microEddies=[];">
+        <span class="rng-vals" id="me-maxr-lbl">4mi</span>
+      </div>
+      <div id="me-list" style="margin-top:6px;font-size:9px;color:var(--muted);font-family:'Space Mono'">Load satellite data to detect</div>
     </div>
 
     <div class="sb-sec">
@@ -532,7 +561,7 @@ const satCache = {chl:{img:null,key:'',status:'idle'}, sst:{img:null,key:'',stat
 const satLayers = {chl:true, sst:true, tc:false};
 let noaaChartOn = false;
 let noaaChartCache = {img:null, key:''};
-const layers    = {cur:true, edy:true, dep:true, gs:true, frt:true};
+const layers    = {cur:true, edy:true, dep:true, gs:true, frt:true, me:true};
 
 // Date state — default to 3 days ago (most reliable satellite data)
 const today = new Date();
@@ -686,7 +715,7 @@ function shiftDate(days){
 function onDateChange(){
   selectedDate=document.getElementById('date-input').value;
   Object.keys(satCache).forEach(k=>{satCache[k].key='';satCache[k].img=null;satCache[k].status='idle';});
-  detectedFronts = null;
+  detectedFronts = null; microEddies = [];
   setSatStatus('chl','idle','—'); setSatStatus('sst','idle','—'); setSatStatus('tc','idle','—');
   loadAllSatellite();
 }
@@ -1119,9 +1148,288 @@ function drawEddies(t){
 }
 
 // ═══════════════════════════════════════════
+// MICRO-EDDY DETECTION — satellite pixel curl
+// Finds tight circular gradient patterns <5mi
+// ═══════════════════════════════════════════
+
+function detectMicroEddies(){
+  const W = satCvs.width, H = satCvs.height;
+  if(!W || !H) return [];
+
+  const sens   = parseFloat(document.getElementById('me-sens')?.value || '3.5');
+  const maxRpx = parseFloat(document.getElementById('me-maxr')?.value || '14');
+
+  // Pick best available image: chl preferred (sharper gradients), fallback sst
+  let srcImg = null;
+  if(satLayers.chl && satCache.chl.img) srcImg = satCache.chl.img;
+  else if(satLayers.sst && satCache.sst.img) srcImg = satCache.sst.img;
+  if(!srcImg) return [];
+
+  // Render to offscreen canvas
+  const tmp = document.createElement('canvas');
+  tmp.width = W; tmp.height = H;
+  const tc = tmp.getContext('2d');
+  tc.drawImage(srcImg, 0, 0, W, H);
+
+  let px;
+  try { px = tc.getImageData(0, 0, W, H).data; }
+  catch(e){ return []; }
+
+  // Build luminance + valid mask
+  const lum  = new Float32Array(W*H);
+  const valid = new Uint8Array(W*H);
+  for(let i=0;i<W*H;i++){
+    const b=i*4;
+    if(px[b+3]<10){ lum[i]=0; valid[i]=0; continue; }
+    lum[i] = px[b]*0.299 + px[b+1]*0.587 + px[b+2]*0.114;
+    valid[i]=1;
+  }
+
+  // Compute Sobel gradients at step resolution
+  const step=2;
+  const gx=new Float32Array(W*H);
+  const gy=new Float32Array(W*H);
+  for(let y=step;y<H-step;y+=1){
+    for(let x=step;x<W-step;x+=1){
+      if(!valid[y*W+x]) continue;
+      const l=(r,c)=>valid[r*W+c]?lum[r*W+c]:lum[y*W+x];
+      gx[y*W+x] = -l(y-step,x-step)+l(y-step,x+step) -2*l(y,x-step)+2*l(y,x+step) -l(y+step,x-step)+l(y+step,x+step);
+      gy[y*W+x] = -l(y-step,x-step)-2*l(y-step,x)+l(y-step,x+step)+l(y+step,x-step)+2*l(y+step,x)-l(y+step,x+step);
+    }
+  }
+
+  // Hough-like circular vote: for each gradient pixel, vote for the center
+  // it points toward (perpendicular to gradient = tangent of eddy ring)
+  const votes = new Float32Array(W*H);
+  const RADII = [];
+  for(let r=Math.max(4,maxRpx*0.3); r<=maxRpx; r+=2) RADII.push(r);
+
+  const scanStep=3;
+  for(let y=scanStep;y<H-scanStep;y+=scanStep){
+    for(let x=scanStep;x<W-scanStep;x+=scanStep){
+      const i=y*W+x;
+      if(!valid[i]) continue;
+      const gmag=Math.sqrt(gx[i]*gx[i]+gy[i]*gy[i]);
+      if(gmag < 8) continue; // skip weak gradient pixels
+      // Gradient direction — point toward eddy center candidates
+      const nx=gx[i]/gmag, ny=gy[i]/gmag;
+      for(const r of RADII){
+        // Vote in both directions along gradient normal
+        for(const sign of [1,-1]){
+          const cx=Math.round(x+sign*nx*r);
+          const cy=Math.round(y+sign*ny*r);
+          if(cx<1||cx>=W-1||cy<1||cy>=H-1) continue;
+          // Weight by gradient magnitude + favor smaller radii
+          votes[cy*W+cx] += gmag * (1.0 - r/(maxRpx*1.5));
+        }
+      }
+    }
+  }
+
+  // Find local maxima in vote map = eddy center candidates
+  const threshold = sens * 200;
+  const candidates = [];
+  const suppress = maxRpx; // non-max suppression radius
+  for(let y=suppress;y<H-suppress;y+=2){
+    for(let x=suppress;x<W-suppress;x+=2){
+      const v=votes[y*W+x];
+      if(v < threshold) continue;
+      // Check it's a local max in suppress-radius window
+      let isMax=true;
+      for(let dy=-4;dy<=4&&isMax;dy+=2){
+        for(let dx=-4;dx<=4&&isMax;dx+=2){
+          if(votes[(y+dy)*W+(x+dx)] > v) isMax=false;
+        }
+      }
+      if(!isMax) continue;
+      candidates.push({x,y,score:v});
+    }
+  }
+
+  // Non-maximum suppression — remove overlapping candidates
+  candidates.sort((a,b)=>b.score-a.score);
+  const kept=[], usedPts=new Set();
+  for(const c of candidates){
+    const key=`${Math.round(c.x/suppress)}_${Math.round(c.y/suppress)}`;
+    if(usedPts.has(key)) continue;
+    usedPts.add(key);
+    kept.push(c);
+    if(kept.length>=20) break; // cap
+  }
+
+  // For each kept center: determine radius, sense, and convert to geo
+  const results=[];
+  for(const c of kept){
+    if(!valid[c.y*W+c.x]) continue;
+
+    // Estimate best-fit radius by finding ring of max gradient magnitude
+    let bestR=maxRpx*0.5, bestRscore=0;
+    for(const r of RADII){
+      let ringScore=0, ringN=0;
+      const nSamples=Math.max(8, Math.round(r*1.2));
+      for(let i=0;i<nSamples;i++){
+        const angle=(i/nSamples)*Math.PI*2;
+        const rx=Math.round(c.x+Math.cos(angle)*r);
+        const ry=Math.round(c.y+Math.sin(angle)*r);
+        if(rx<0||rx>=W||ry<0||ry>=H) continue;
+        ringScore+=Math.sqrt(gx[ry*W+rx]**2+gy[ry*W+rx]**2);
+        ringN++;
+      }
+      if(ringN>4 && ringScore/ringN > bestRscore){ bestRscore=ringScore/ringN; bestR=r; }
+    }
+
+    // Determine rotation sense: compute tangential vs radial gradient component
+    // on the ring — CCW eddies have tangential flow; sense from curl sign
+    let curlSum=0, curlN=0;
+    const cr=Math.round(bestR*0.7);
+    const nS=12;
+    for(let i=0;i<nS;i++){
+      const a=(i/nS)*Math.PI*2;
+      const rx=Math.round(c.x+Math.cos(a)*cr);
+      const ry=Math.round(c.y+Math.sin(a)*cr);
+      if(rx<2||rx>=W-2||ry<2||ry>=H-2) continue;
+      // Tangent direction at this point on ring
+      const tx=-Math.sin(a), ty=Math.cos(a);
+      // Gradient projected onto tangent = curl indicator
+      const proj=gx[ry*W+rx]*tx + gy[ry*W+rx]*ty;
+      curlSum+=proj; curlN++;
+    }
+    const sense = curlN>3 ? (curlSum/curlN > 0 ? 'CCW' : 'CW') : 'CW';
+    const strength = Math.min(1, c.score / (threshold*3));
+
+    // Convert canvas coords to geo
+    const [lat, lng] = canvasToGeo(c.x, c.y);
+    const [latR]     = canvasToGeo(c.x, c.y - bestR);
+    const radiusDeg  = Math.abs(latR - lat);
+    const radiusMi   = radiusDeg * 69;
+
+    if(radiusMi > 8) continue; // skip if too big
+
+    results.push({lat,lng,radiusPx:bestR,radiusDeg,radiusMi,sense,strength,score:c.score,cx:c.x,cy:c.y});
+  }
+
+  return results;
+}
+
+function drawMicroEddies(t){
+  if(!layers.me) return;
+  if(!microEddies.length){
+    const hasSat=(satLayers.chl&&satCache.chl.img)||(satLayers.sst&&satCache.sst.img);
+    if(!hasSat) return;
+    microEddies = detectMicroEddies();
+    updateMicroEddySidebar();
+  }
+  if(!microEddies.length) return;
+
+  const W=cvs.width, H=cvs.height;
+  ctx.save();
+
+  microEddies.forEach((e,idx)=>{
+    const cx=e.cx, cy=e.cy;
+    if(cx<-30||cx>W+30||cy<-30||cy>H+30) return;
+    const r=e.radiusPx;
+    const isCCW=(e.sense==='CCW');
+    // CCW = upwelling cool core → cyan; CW = warm core sinking → orange
+    const colCore  = isCCW ? '#00ccff' : '#ff6600';
+    const colRing  = isCCW ? '#44eeff' : '#ffaa00';
+    const s=e.strength;
+
+    // Glow ring — very high contrast
+    ctx.beginPath();
+    ctx.arc(cx,cy,r,0,Math.PI*2);
+    ctx.strokeStyle=colRing;
+    ctx.lineWidth = 1.5 + s*2;
+    ctx.shadowColor=colRing;
+    ctx.shadowBlur = 6 + s*10;
+    ctx.setLineDash([4,3]);
+    ctx.stroke();
+    ctx.setLineDash([]);
+    ctx.shadowBlur=0;
+
+    // Pulsing inner highlight
+    const pulse=(Math.sin(t*2.2+idx*1.1)*0.5+0.5);
+    ctx.beginPath();
+    ctx.arc(cx,cy,r*0.45+pulse*r*0.08,0,Math.PI*2);
+    ctx.strokeStyle=colCore+(Math.round((0.4+s*0.4)*255).toString(16).padStart(2,'0'));
+    ctx.lineWidth=1;
+    ctx.shadowColor=colCore;
+    ctx.shadowBlur=4+pulse*6;
+    ctx.stroke();
+    ctx.shadowBlur=0;
+
+    // Spinning curl arrows on ring
+    const nArrows=Math.max(3,Math.round(r/8));
+    const rotDir=isCCW?1:-1;
+    const rot=t*rotDir*0.8;
+    for(let i=0;i<nArrows;i++){
+      const ang=(i/nArrows)*Math.PI*2+rot;
+      const ax=cx+Math.cos(ang)*r, ay=cy+Math.sin(ang)*r;
+      const tAng=ang+rotDir*Math.PI/2;
+      const arLen=4+s*5;
+      const tx=Math.cos(tAng)*arLen, ty=Math.sin(tAng)*arLen;
+      ctx.strokeStyle=colRing+'dd';
+      ctx.lineWidth=1.2;
+      ctx.shadowColor=colRing; ctx.shadowBlur=3;
+      ctx.beginPath();
+      ctx.moveTo(ax-tx*0.4,ay-ty*0.4);
+      ctx.lineTo(ax+tx*0.6,ay+ty*0.6);
+      ctx.stroke();
+      // arrowhead
+      const ha=Math.atan2(ty,tx);
+      ctx.beginPath();
+      ctx.moveTo(ax+tx*0.6,ay+ty*0.6);
+      ctx.lineTo(ax+tx*0.6-4*Math.cos(ha-0.5),ay+ty*0.6-4*Math.sin(ha-0.5));
+      ctx.moveTo(ax+tx*0.6,ay+ty*0.6);
+      ctx.lineTo(ax+tx*0.6-4*Math.cos(ha+0.5),ay+ty*0.6-4*Math.sin(ha+0.5));
+      ctx.stroke();
+      ctx.shadowBlur=0;
+    }
+
+    // Center dot
+    ctx.beginPath();
+    ctx.arc(cx,cy,3+pulse*1.5,0,Math.PI*2);
+    ctx.fillStyle=colCore;
+    ctx.shadowColor=colCore; ctx.shadowBlur=8;
+    ctx.fill();
+    ctx.shadowBlur=0;
+
+    // Label with radius
+    ctx.font=`bold 8px "Space Mono",monospace`;
+    ctx.fillStyle=colRing;
+    ctx.textAlign='center';
+    ctx.shadowColor='rgba(0,0,0,0.9)'; ctx.shadowBlur=3;
+    ctx.fillText(`${isCCW?'↺':'↻'} ${e.radiusMi.toFixed(1)}mi`,cx,cy-r-5);
+    ctx.shadowBlur=0;
+    ctx.textAlign='left';
+  });
+
+  ctx.restore();
+}
+
+function updateMicroEddySidebar(){
+  const el=document.getElementById('me-list');
+  if(!el) return;
+  if(!microEddies.length){
+    el.innerHTML='<div style="color:var(--muted)">None detected — try lower sens or load satellite data</div>';
+    return;
+  }
+  const sorted=[...microEddies].sort((a,b)=>a.radiusMi-b.radiusMi);
+  el.innerHTML=sorted.slice(0,8).map((e,i)=>{
+    const col=e.sense==='CCW'?'#00ccff':'#ff6600';
+    const desc=e.sense==='CCW'?'Cool/upwelling':'Warm/sinking';
+    return `<div class="eddy-card" onclick="panTo(${e.lat},${e.lng})" style="border-left:2px solid ${col};margin-bottom:4px">
+      <div style="font-family:'Bebas Neue';font-size:11px;color:${col};letter-spacing:1px">${e.sense==='CCW'?'↺':'↻'} ${e.radiusMi.toFixed(1)}mi · ${desc}</div>
+      <div style="font-family:'Space Mono';font-size:8px;color:var(--muted)">${e.lat.toFixed(4)}°N ${Math.abs(e.lng).toFixed(4)}°W</div>
+    </div>`;
+  }).join('');
+  if(microEddies.length>8) el.innerHTML+=`<div style="font-family:'Space Mono';font-size:8px;color:var(--muted);margin-top:4px">+${microEddies.length-8} more</div>`;
+}
+
+// ═══════════════════════════════════════════
 // FRONT DETECTION — edge detection on sat images
 // ═══════════════════════════════════════════
 let detectedFronts = null; // {sst:[], chl:[]} arrays of {x0,y0,x1,y1,strength}
+let microEddies = []; // satellite-detected micro-eddies
 
 function detectFronts(){
   const W = satCvs.width, H = satCvs.height;
@@ -1329,6 +1637,9 @@ function draw(){
   // SST & Chlorophyll fronts
   drawFronts();
 
+  // Micro-eddies from satellite
+  drawMicroEddies(t);
+
   // Landmarks
   ctx.save();
   const txtColor=hasSat?'rgba(255,255,255,0.9)':'#fff';
@@ -1405,7 +1716,7 @@ function loop(ts){
       loop._lastVKey=vKey;
       bgCacheKey='';contourCacheKey='';
       Object.keys(satCache).forEach(k=>satCache[k].key='');
-      detectedFronts = null; // viewport moved — recompute fronts
+      detectedFronts = null; microEddies = []; // viewport moved
       // Only reload NOAA chart if moved significantly (saves bandwidth)
       const nb=getViewBounds(),lb=noaaChartCache._lastBounds||{};
       if(Math.abs((nb.west)-(lb.west||99))>0.5||Math.abs((nb.north)-(lb.north||99))>0.5){
@@ -1543,7 +1854,8 @@ function toggleLayer(key){
   layers[key]=!layers[key];
   document.getElementById('tog-'+key).classList.toggle('on',layers[key]);
   document.getElementById('btn-'+key).classList.toggle('active',layers[key]);
-  if(key==='frt') detectedFronts=null; // force recompute on toggle
+  if(key==='frt') detectedFronts=null;
+  if(key==='me') microEddies=[];
 }
 function panTo(lat,lng){vp.lat=lat+0.05;vp.lng=lng+0.25;vp.scale=Math.max(vp.scale,1.5);}
 
