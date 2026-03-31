@@ -60,6 +60,43 @@ exports.handler = async (event) => {
       return { statusCode: 502, headers: CORS, body: JSON.stringify({ error: 'No data' }) };
     }
 
+    // NOAA ENC Nautical Chart — NOAA Chart Display Service WMS
+    if (type === 'noaa_chart') {
+      const { west, south, east, north, width, height } = payload;
+      const base = `?SERVICE=WMS&VERSION=1.3.0&REQUEST=GetMap&STYLES=&FORMAT=image/png&TRANSPARENT=true&CRS=CRS:84&WIDTH=${width}&HEIGHT=${height}&BBOX=${west},${south},${east},${north}`;
+
+      // Try both NOAA WMS endpoints — ENCOnline is the current active service
+      const urls = [
+        'https://gis.charttools.noaa.gov/arcgis/rest/services/MCS/ENCOnline/MapServer/exts/MaritimeChartService/WMSServer'
+          + base + '&LAYERS=0,1,2,3,4,5,6,7',
+        'https://gis.charttools.noaa.gov/arcgis/rest/services/MCS/NOAAChartDisplay/MapServer/exts/MaritimeChartService/WMSServer'
+          + base + '&LAYERS=0,1,2,3,4,5,6,7',
+      ];
+
+      for (const url of urls) {
+        try {
+          const res = await fetch(url, {
+            headers: { 'User-Agent': 'BlueWaterIntel/1.0' },
+            signal: AbortSignal.timeout(20000)
+          });
+          if (!res.ok) { console.log('NOAA chart endpoint failed:', url, res.status); continue; }
+          const ct = res.headers.get('content-type') || '';
+          if (!ct.includes('image')) {
+            const txt = await res.text();
+            console.log('NOAA non-image response:', txt.slice(0, 200));
+            continue;
+          }
+          const buf = await res.arrayBuffer();
+          const b64 = Buffer.from(buf).toString('base64');
+          return { statusCode: 200, headers: CORS, body: JSON.stringify({ image: b64, contentType: ct }) };
+        } catch(e) {
+          console.log('NOAA chart fetch error:', e.message);
+          continue;
+        }
+      }
+      return { statusCode: 502, headers: CORS, body: JSON.stringify({ error: 'All NOAA chart endpoints failed' }) };
+    }
+
     // GIBS — proxy NASA satellite imagery
     if (type === 'gibs') {
       const { layer, date, west, south, east, north, width, height } = payload;
