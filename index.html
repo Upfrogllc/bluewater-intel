@@ -1034,12 +1034,7 @@ function drawSatellite(){
   satCtx.clearRect(0,0,W,H);
   satCtx.globalCompositeOperation='source-over';
 
-  // NOAA Nautical Chart — drawn first as base, uses layerAlpha.noaa
-  if(noaaChartOn && noaaChartCache.img){
-    try{ satCtx.globalAlpha=layerAlpha.noaa; satCtx.drawImage(noaaChartCache.img,0,0,W,H); }catch(e){}
-  }
-
-  // Draw true color, uses layerAlpha.tc
+  // Draw true color first as base
   if(satLayers.tc && satCache.tc.img){
     try{
       satCtx.globalAlpha=layerAlpha.tc;
@@ -1063,6 +1058,18 @@ function drawSatellite(){
       satCtx.globalCompositeOperation = 'source-over';
     }catch(e){}
   }
+
+  // NOAA Nautical Chart — drawn LAST so it shows clearly on top of satellite layers
+  // Using 'multiply' blend so chart lines show through without washing out satellite data
+  if(noaaChartOn && noaaChartCache.img){
+    try{
+      satCtx.globalCompositeOperation = 'multiply';
+      satCtx.globalAlpha = layerAlpha.noaa;
+      satCtx.drawImage(noaaChartCache.img,0,0,W,H);
+      satCtx.globalCompositeOperation = 'source-over';
+    }catch(e){}
+  }
+
   satCtx.globalAlpha=1.0;
   satCtx.globalCompositeOperation='source-over';
 }
