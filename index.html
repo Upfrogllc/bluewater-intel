@@ -190,35 +190,35 @@ html,body{height:100%;overflow:hidden;background:#000;color:var(--text);font-fam
       <div class="sb-ttl">Satellite Layers</div>
 
       <!-- Chlorophyll -->
-      <div class="layer-btn active" id="btn-chl" onclick="toggleSat('chl')">
+      <div class="layer-btn" id="btn-chl" onclick="toggleSat('chl')">
         <div class="lb-left">
           <div class="lb-dot" style="background:#5dffaa;box-shadow:0 0 5px #5dffaa66"></div>
           <span>Chlorophyll-a</span>
         </div>
         <span class="lb-src">VIIRS/NASA</span>
-        <div class="tog on" id="tog-chl"></div>
+        <div class="tog" id="tog-chl"></div>
       </div>
       <div class="sat-badge idle" id="sb-chl"><div class="dot"></div><span id="sl-chl">Not loaded</span></div>
 
       <!-- SST -->
-      <div class="layer-btn active" id="btn-sst" onclick="toggleSat('sst')">
+      <div class="layer-btn" id="btn-sst" onclick="toggleSat('sst')">
         <div class="lb-left">
           <div class="lb-dot" style="background:#ff4e2a;box-shadow:0 0 5px #ff4e2a66"></div>
           <span>Sea Surface Temp</span>
         </div>
         <span class="lb-src">MODIS/NASA</span>
-        <div class="tog on" id="tog-sst"></div>
+        <div class="tog" id="tog-sst"></div>
       </div>
       <div class="sat-badge idle" id="sb-sst"><div class="dot"></div><span id="sl-sst">Not loaded</span></div>
 
       <!-- True Color -->
-      <div class="layer-btn active" id="btn-noaa" onclick="toggleNOAAChart()">
+      <div class="layer-btn" id="btn-noaa" onclick="toggleNOAAChart()">
         <div class="lb-left">
           <div class="lb-dot" style="background:#d4e8ff;box-shadow:0 0 5px #d4e8ff66"></div>
           <span>⚓ NOAA Nautical Chart</span>
         </div>
         <span class="lb-src">NOAA ENC</span>
-        <div class="tog on" id="tog-noaa"></div>
+        <div class="tog" id="tog-noaa"></div>
       </div>
       <div class="sat-badge idle" id="sb-noaa"><div class="dot"></div><span id="sl-noaa">Loading...</span></div>
 
@@ -236,40 +236,40 @@ html,body{height:100%;overflow:hidden;background:#000;color:var(--text);font-fam
     <div class="sb-sec">
       <div class="sb-ttl">Ocean Layers</div>
 
-      <div class="layer-btn active" id="btn-cur" onclick="toggleLayer('cur')">
+      <div class="layer-btn" id="btn-cur" onclick="toggleLayer('cur')">
         <div class="lb-left">
           <div class="lb-dot" style="background:#4ac8ff;box-shadow:0 0 5px #4ac8ff66"></div>
           <span>★ Live Currents</span>
         </div>
         <span class="lb-src">CMEMS</span>
-        <div class="tog on" id="tog-cur"></div>
+        <div class="tog" id="tog-cur"></div>
       </div>
 
-      <div class="layer-btn active" id="btn-edy" onclick="toggleLayer('edy')">
+      <div class="layer-btn" id="btn-edy" onclick="toggleLayer('edy')">
         <div class="lb-left">
           <div class="lb-dot" style="background:#ff88ff;box-shadow:0 0 5px #ff88ff66"></div>
           <span>Eddies</span>
         </div>
         <span class="lb-src">Computed</span>
-        <div class="tog on" id="tog-edy"></div>
+        <div class="tog" id="tog-edy"></div>
       </div>
 
-      <div class="layer-btn active" id="btn-dep" onclick="toggleLayer('dep')">
+      <div class="layer-btn" id="btn-dep" onclick="toggleLayer('dep')">
         <div class="lb-left">
           <div class="lb-dot" style="background:#5577cc;box-shadow:0 0 5px #5577cc66"></div>
           <span>Depth Contours</span>
         </div>
         <span class="lb-src">NOAA</span>
-        <div class="tog on" id="tog-dep"></div>
+        <div class="tog" id="tog-dep"></div>
       </div>
 
-      <div class="layer-btn active" id="btn-gs" onclick="toggleLayer('gs')">
+      <div class="layer-btn" id="btn-gs" onclick="toggleLayer('gs')">
         <div class="lb-left">
           <div class="lb-dot" style="background:#f5a623;box-shadow:0 0 5px #f5a62366"></div>
           <span>Gulf Stream</span>
         </div>
         <span class="lb-src">Modeled</span>
-        <div class="tog on" id="tog-gs"></div>
+        <div class="tog" id="tog-gs"></div>
       </div>
 
       <div class="layer-btn" id="btn-mld" onclick="toggleLayer('mld')">
@@ -501,8 +501,8 @@ let bgCache=null, bgCacheKey='', contourCache=null, contourCacheKey='';
 
 // Satellite image cache per layer
 const satCache = {chl:{img:null,key:'',status:'idle'}, sst:{img:null,key:'',status:'idle'}, tc:{img:null,key:'',status:'idle'}};
-const satLayers = {chl:true, sst:true, tc:false};
-let noaaChartOn = true; // NOAA nautical chart base layer
+const satLayers = {chl:false, sst:false, tc:false};
+let noaaChartOn = false; // off by default — user toggles on
 let noaaChartCache = {img:null, key:''};
 
 
@@ -547,7 +547,7 @@ function resetScales(){
   document.getElementById('chl-boost').value='1';
   updateScales();
 }
-const layers    = {cur:true, edy:true, dep:true, gs:true, mld:false, fsle:false};
+const layers    = {cur:false, edy:false, dep:false, gs:false, mld:false, fsle:false};
 
 // Date state — default to 3 days ago (most reliable satellite data)
 const today = new Date();
@@ -873,8 +873,11 @@ async function loadSatLayer(layerKey, dateOverride){
 }
 
 async function loadAllSatellite(){
+  // Only load layers that are actually on
+  const anyOn = Object.values(satLayers).some(Boolean) || noaaChartOn;
+  if(!anyOn) return;
   await Promise.all([
-    ...Object.keys(satLayers).map(k=>loadSatLayer(k)),
+    ...Object.keys(satLayers).filter(k=>satLayers[k]).map(k=>loadSatLayer(k)),
     noaaChartOn ? loadNOAAChart() : Promise.resolve()
   ]);
   drawSatellite();
