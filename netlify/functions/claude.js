@@ -19,8 +19,7 @@ exports.handler = async (event) => {
       return { statusCode: 200, headers: CORS, body: JSON.stringify({ keySet: key.length > 0, keyPrefix: key.slice(0, 10) }) };
     }
 
-    // MARINE BATCH — fetch multiple points in one function call
-    // payload.points = [{lat, lng}, ...] up to 10 points
+    // MARINE BATCH — fetch multiple Open-Meteo current points
     if (type === 'marine_batch') {
       const { points } = payload;
       const base = 'https://marine-api.open-meteo.com/v1/marine';
@@ -46,25 +45,22 @@ exports.handler = async (event) => {
       return { statusCode: 200, headers: CORS, body: JSON.stringify({ results: results.filter(Boolean) }) };
     }
 
-    // MARINE SINGLE (fallback)
+    // MARINE SINGLE — fallback single point
     if (type === 'marine') {
       const { lat, lng } = payload;
       const base = `https://marine-api.open-meteo.com/v1/marine?latitude=${lat}&longitude=${lng}&current=ocean_current_velocity,ocean_current_direction,sea_surface_temperature&wind_speed_unit=kn`;
-      const urls = [`${base}&models=meteofrance_currents`, base];
-      let lastError = 'Unknown';
-      for (const url of urls) {
+      for (const url of [`${base}&models=meteofrance_currents`, base]) {
         try {
           const res = await fetch(url);
           const data = await res.json();
-          if (data.error) { lastError = data.reason || 'API error'; continue; }
-          if (data.current?.ocean_current_velocity == null) { lastError = 'No data'; continue; }
-          return { statusCode: 200, headers: CORS, body: JSON.stringify(data) };
-        } catch (e) { lastError = e.message; }
+          if (!data.error && data.current?.ocean_current_velocity != null)
+            return { statusCode: 200, headers: CORS, body: JSON.stringify(data) };
+        } catch(e) {}
       }
-      return { statusCode: 502, headers: CORS, body: JSON.stringify({ error: lastError }) };
+      return { statusCode: 502, headers: CORS, body: JSON.stringify({ error: 'No data' }) };
     }
 
-    // GIBS satellite imagery
+    // GIBS — proxy NASA satellite imagery
     if (type === 'gibs') {
       const { layer, date, west, south, east, north, width, height } = payload;
       const url = `https://gibs.earthdata.nasa.gov/wms/epsg4326/best/wms.cgi?SERVICE=WMS&VERSION=1.1.1&REQUEST=GetMap&LAYERS=${layer}&STYLES=&FORMAT=image/png&TRANSPARENT=true&SRS=EPSG:4326&WIDTH=${width}&HEIGHT=${height}&BBOX=${west},${south},${east},${north}&TIME=${date}`;
@@ -75,11 +71,64 @@ exports.handler = async (event) => {
       return { statusCode: 200, headers: CORS, body: JSON.stringify({ image: b64, contentType: res.headers.get('content-type') || 'image/png' }) };
     }
 
-    // CLAUDE AI
+    // CMEMS MLD — proxy Copernicus Marine Mixed Layer Depth WMS
+    if (type === 'cmems_mld') {
+      const { west, south, east, north, width, height } = payload;
+      const user = process.env.CMEMS_USER;
+      const pass = process.env.CMEMS_PASS;
+
+      if (!user || !pass) {
+        return { statusCode: 500, headers: CORS, body: JSON.stringify({ error: 'CMEMS credentials not configured in Netlify env vars (CMEMS_USER, CMEMS_PASS)' }) };
+      }
+
+      // CMEMS WMS for Global Physics Analysis — mlotst (mixed layer thickness)
+      // Product: GLOBAL_ANALYSISFORECAST_PHY_001_024
+      // Dataset: cmems_mod_glo_phy_anfc_0.083deg_P1D-m
+      const wmsUrl = `https://nrt.cmems-du.eu/thredds/wms/cmems_mod_glo_phy_anfc_0.083deg_P1D-m`
+        + `?SERVICE=WMS&VERSION=1.3.0&REQUEST=GetMap`
+        + `&LAYERS=mlotst`
+        + `&STYLES=boxfill/viridis`
+        + `&FORMAT=image/png`
+        + `&TRANSPARENT=true`
+        + `&CRS=CRS:84`
+        + `&WIDTH=${width}&HEIGHT=${height}`
+        + `&BBOX=${west},${south},${east},${north}`
+        + `&COLORSCALERANGE=0,200`
+        + `&NUMCOLORBANDS=50`;
+
+      const auth = Buffer.from(`${user}:${pass}`).toString('base64');
+      const res = await fetch(wmsUrl, {
+        headers: {
+          'Authorization': `Basic ${auth}`,
+          'User-Agent': 'BlueWaterIntel/1.0'
+        }
+      });
+
+      if (!res.ok) {
+        const txt = await res.text();
+        return { statusCode: res.status, headers: CORS, body: JSON.stringify({ error: `CMEMS ${res.status}: ${txt.slice(0,200)}` }) };
+      }
+
+      const contentType = res.headers.get('content-type') || '';
+      if (!contentType.includes('image')) {
+        const txt = await res.text();
+        return { statusCode: 502, headers: CORS, body: JSON.stringify({ error: `CMEMS returned non-image: ${txt.slice(0,200)}` }) };
+      }
+
+      const buf = await res.arrayBuffer();
+      const b64 = Buffer.from(buf).toString('base64');
+      return { statusCode: 200, headers: CORS, body: JSON.stringify({ image: b64, contentType }) };
+    }
+
+    // CLAUDE — proxy Anthropic AI
     const { type: _t, ...claudeBody } = payload;
     const response = await fetch('https://api.anthropic.com/v1/messages', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'x-api-key': process.env.ANTHROPIC_API_KEY, 'anthropic-version': '2023-06-01' },
+      headers: {
+        'Content-Type': 'application/json',
+        'x-api-key': process.env.ANTHROPIC_API_KEY,
+        'anthropic-version': '2023-06-01',
+      },
       body: JSON.stringify(claudeBody),
     });
     const data = await response.json();
