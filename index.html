@@ -239,14 +239,15 @@ input[type=range].rng.sst-rng::-moz-range-thumb{background:var(--hot);}
       <div class="sat-badge idle" id="sb-chl"><div class="dot"></div><span id="sl-chl">Not loaded</span></div>
 
       <!-- Source picker grid -->
-      <div id="chl-src-grid" style="display:grid;grid-template-columns:1fr 1fr;gap:3px;margin:4px 0 6px;padding:0 2px">
-        <button class="src-btn active" id="src-n20"  onclick="setChlSource('n20')" title="NOAA-20 VIIRS · Daily 1km · Dec 2017–now">NOAA-20</button>
-        <button class="src-btn"        id="src-n21"  onclick="setChlSource('n21')" title="NOAA-21 VIIRS · Daily 1km · Mar 2023–now">NOAA-21</button>
-        <button class="src-btn"        id="src-snpp" onclick="setChlSource('snpp')" title="Suomi NPP VIIRS · Daily 1km · 2012–now">S-NPP</button>
-        <button class="src-btn"        id="src-s3a"  onclick="setChlSource('s3a')" title="Sentinel-3A OLCI · Daily 1km · Apr 2016–now">S-3A</button>
-        <button class="src-btn"        id="src-s3b"  onclick="setChlSource('s3b')" title="Sentinel-3B OLCI · Daily 1km · May 2018–now">S-3B</button>
-        <button class="src-btn"        id="src-modA" onclick="setChlSource('modA')" title="MODIS Aqua · Daily 4km · 2002–2022">MODIS Aq</button>
+      <div id="chl-src-grid" style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:3px;margin:4px 0 2px;padding:0 2px">
+        <button class="src-btn active" id="src-n20"  onclick="setChlSource('n20')"  title="NOAA-20 VIIRS · 1km daily · Dec 2017–now">NOAA-20</button>
+        <button class="src-btn"        id="src-n21"  onclick="setChlSource('n21')"  title="NOAA-21 VIIRS · 1km daily · Mar 2023–now">NOAA-21</button>
+        <button class="src-btn"        id="src-snpp" onclick="setChlSource('snpp')" title="Suomi-NPP VIIRS · 1km daily · 2012–now">S-NPP</button>
+        <button class="src-btn"        id="src-pace" onclick="setChlSource('pace')" title="PACE OCI · 1km daily · Feb 2024–now · newest sensor">PACE</button>
+        <button class="src-btn"        id="src-modA" onclick="setChlSource('modA')" title="MODIS Aqua · 4km daily · 2002–2022 — use old dates only">MOD-Aq</button>
+        <button class="src-btn"        id="src-modT" onclick="setChlSource('modT')" title="MODIS Terra · 4km daily · 2000–2022 — use old dates only">MOD-Tr</button>
       </div>
+      <div id="chl-src-note" style="font-family:'Space Mono';font-size:7px;color:var(--muted);padding:0 2px 6px;line-height:1.6"></div>
 
       <div class="rng-row" style="margin-top:2px">
         <span class="rng-tag">α</span>
@@ -500,10 +501,11 @@ input[type=range].rng.sst-rng::-moz-range-thumb{background:var(--hot);}
     <canvas id="mapCanvas"></canvas>
 
     <div id="date-bar">
-      <label>DATE</label>
+      <label>SAT DATE</label>
       <button class="date-nav" onclick="shiftDate(-1)">‹</button>
       <input type="date" id="date-input" onchange="onDateChange()">
       <button class="date-nav" onclick="shiftDate(1)">›</button>
+      <button class="date-nav" onclick="goToYesterday()" title="Jump to yesterday (most recent)">⟳</button>
       <span style="font-family:'Space Mono';font-size:8px;color:var(--muted)" id="date-status">—</span>
     </div>
 
@@ -564,13 +566,14 @@ input[type=range].rng.sst-rng::-moz-range-thumb{background:var(--hot);}
 // ═══════════════════════════════════════════
 const GIBS = 'https://gibs.earthdata.nasa.gov/wms/epsg4326/best/wms.cgi';
 // All available chlorophyll sources — switchable at runtime
+// Layer names verified against NASA GIBS WMS naming conventions
 const CHL_SOURCES = {
-  n20:  { layer:'VIIRS_NOAA20_Chlorophyll_A',          label:'NOAA-20',   desc:'VIIRS NOAA-20 · 1km · daily · Dec 2017–now' },
-  n21:  { layer:'VIIRS_NOAA21_Chlorophyll_A',          label:'NOAA-21',   desc:'VIIRS NOAA-21 · 1km · daily · Mar 2023–now' },
-  snpp: { layer:'VIIRS_SNPP_Chlorophyll_A',            label:'Suomi-NPP', desc:'VIIRS S-NPP · 1km · daily · 2012–now' },
-  s3a:  { layer:'Sentinel_3A_OLCI_Chlorophyll_A',      label:'Sentinel-3A', desc:'Sentinel-3A OLCI · 1km · daily · Apr 2016–now' },
-  s3b:  { layer:'Sentinel_3B_OLCI_Chlorophyll_A',      label:'Sentinel-3B', desc:'Sentinel-3B OLCI · 1km · daily · May 2018–now' },
-  modA: { layer:'MODIS_Aqua_Chlorophyll_A',            label:'MODIS Aqua', desc:'MODIS Aqua · 4km · daily · 2002–2022 only' },
+  n20:  { layer:'VIIRS_NOAA20_Chlorophyll_A',    label:'NOAA-20',    res:'1km', note:'Daily · Dec 2017–now ✓' },
+  n21:  { layer:'VIIRS_NOAA21_Chlorophyll_A',    label:'NOAA-21',    res:'1km', note:'Daily · Mar 2023–now ✓' },
+  snpp: { layer:'VIIRS_SNPP_Chlorophyll_A',      label:'Suomi-NPP',  res:'1km', note:'Daily · 2012–now (sparse swath)' },
+  modA: { layer:'MODIS_Aqua_Chlorophyll_A',      label:'MODIS Aqua', res:'4km', note:'Daily · 2002–2022 (use old dates)' },
+  modT: { layer:'MODIS_Terra_Chlorophyll_A',     label:'MODIS Terra',res:'4km', note:'Daily · 2000–2022 (use old dates)' },
+  pace: { layer:'PACE_OCI_Chlorophyll_A',        label:'PACE/OCI',   res:'1km', note:'Daily · Feb 2024–now (newest)' },
 };
 let activeChlSrc = 'n20'; // currently selected source
 
@@ -598,12 +601,13 @@ let noaaChartOn = false;
 let noaaChartCache = {img:null, key:''};
 const layers    = {cur:true, edy:true, dep:true, gs:true, frt:true, me:true};
 
-// Date state — default to 3 days ago (most reliable satellite data)
+// Date state — default to yesterday (most recent satellite data with processing lag)
+// NOAA-20/21 are available within ~3hrs of overpass but we default to yesterday for safety
 const today = new Date();
-today.setDate(today.getDate()-3);
-let selectedDate = today.toISOString().split('T')[0];
+const yesterday = new Date(today); yesterday.setDate(yesterday.getDate()-1);
+let selectedDate = yesterday.toISOString().split('T')[0];
 document.getElementById('date-input').value = selectedDate;
-document.getElementById('date-input').max = new Date().toISOString().split('T')[0];
+document.getElementById('date-input').max = today.toISOString().split('T')[0];
 
 // ═══════════════════════════════════════════
 // CLOCK
@@ -633,14 +637,16 @@ function setChlSource(key){
     const btn = document.getElementById('src-'+k);
     if(btn) btn.classList.toggle('active', k===key);
   });
-  // Update sidebar label
+  // Update sidebar label + note
   const lbl = document.getElementById('chl-src-lbl');
   if(lbl) lbl.textContent = CHL_SOURCES[key].label;
+  const note = document.getElementById('chl-src-note');
+  if(note) note.textContent = CHL_SOURCES[key].note || '';
 
   // Bust cache and reload
   satCache.chl = {img:null, key:'', status:'idle'};
   detectedFronts = null; microEddies = [];
-  setSatStatus('chl','idle','Switching source...');
+  setSatStatus('chl','loading', CHL_SOURCES[key].label+' — loading...');
   if(satLayers.chl) loadSatLayer('chl').then(drawSatellite);
 }
 function closeKeyModal(){document.getElementById('key-modal').style.display='none';}
@@ -760,6 +766,12 @@ window.addEventListener('resize',resize); resize();
 // ═══════════════════════════════════════════
 // DATE CONTROLS
 // ═══════════════════════════════════════════
+function goToYesterday(){
+  const d = new Date(); d.setDate(d.getDate()-1);
+  selectedDate = d.toISOString().split('T')[0];
+  document.getElementById('date-input').value = selectedDate;
+  onDateChange();
+}
 function shiftDate(days){
   const d=new Date(selectedDate+'T12:00:00Z');
   d.setDate(d.getDate()+days);
