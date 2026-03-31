@@ -439,9 +439,11 @@ const GIBS_LAYERS = {
     'MODIS_Aqua_Chlorophyll_A',            // MODIS Aqua, daily 4km, 2002-present
   ],
   sst: [
-    'MODIS_Aqua_L3_SST_Thermal_4km_Day_8Day', // 8-day composite, best for clear view
-    'MODIS_Aqua_L3_SST_Thermal_4km_Night_8Day', // nighttime version
-    'MODIS_Terra_L3_SST_Thermal_4km_Day_8Day',  // Terra fallback
+    'GHRSST_L4_MUR_Sea_Surface_Temperature',        // MUR daily 1km, gap-filled, BEST
+    'MODIS_Aqua_L3_SST_Thermal_4km_Day_8Day',       // 8-day composite daytime
+    'MODIS_Aqua_L3_SST_Thermal_4km_Night_8Day',     // 8-day composite nighttime
+    'MODIS_Terra_L3_SST_Thermal_4km_Day_8Day',      // Terra daytime
+    'VIIRS_SNPP_L3_SST_MidInfra_4km_Night_8Day',   // VIIRS nighttime
   ],
   tc: [
     'VIIRS_NOAA20_CorrectedReflectance_TrueColor', // NOAA-20, 375m
@@ -645,15 +647,17 @@ function setSatStatus(layer, state, msg){
   document.getElementById('sl-'+layer).textContent=msg;
 }
 
-async function loadSatLayer(layerKey){
+async function loadSatLayer(layerKey, dateOverride){
   if(!satLayers[layerKey]) return;
   const b=getViewBounds();
   const W=Math.round(satCvs.width), H=Math.round(satCvs.height);
-  const cacheKey=`${layerKey}_${selectedDate}_${b.west.toFixed(3)}_${b.south.toFixed(3)}_${b.east.toFixed(3)}_${b.north.toFixed(3)}_${W}_${H}`;
+  const useDate = dateOverride || selectedDate;
+  const cacheKey=`${layerKey}_${useDate}_${b.west.toFixed(3)}_${b.south.toFixed(3)}_${b.east.toFixed(3)}_${b.north.toFixed(3)}_${W}_${H}`;
   if(satCache[layerKey].key===cacheKey && satCache[layerKey].img) return;
 
   setSatStatus(layerKey,'loading','Fetching via proxy...');
   satCache[layerKey].status='loading';
+  const date = useDate;
 
   const layerList = Array.isArray(GIBS_LAYERS[layerKey]) ? GIBS_LAYERS[layerKey] : [GIBS_LAYERS[layerKey]];
   let loaded = false;
@@ -689,20 +693,25 @@ async function loadSatLayer(layerKey){
       
       // Quick check: is image non-empty? (GIBS returns blank PNGs for no-data dates)
       const testCvs=document.createElement('canvas');
-      testCvs.width=16;testCvs.height=16;
+      testCvs.width=32;testCvs.height=32;
       const tc2=testCvs.getContext('2d');
-      tc2.drawImage(img,0,0,16,16);
-      const px=tc2.getImageData(4,4,8,8).data;
-      const hasData=Array.from(px).some((v,i)=>i%4!==3&&v>5); // any non-zero non-alpha pixel
+      tc2.drawImage(img,0,0,32,32);
+      const px=tc2.getImageData(2,2,28,28).data;
+      let nonTransparent=0, nonBlack=0;
+      for(let pi=0;pi<px.length;pi+=4){
+        if(px[pi+3]>20) nonTransparent++;
+        if(px[pi+3]>20&&(px[pi]>8||px[pi+1]>8||px[pi+2]>8)) nonBlack++;
+      }
+      const hasData = nonBlack > 10; // at least 10 colored pixels
       
       if(!hasData && layerList.indexOf(layerName) < layerList.length-1){
-        console.info(layerName,'returned empty image, trying next layer...');
+        console.info(layerName,'returned empty/blank image for',date,'trying next layer...');
         continue; // try next fallback
       }
       
       satCache[layerKey]={img,key:cacheKey,status:'live',layerUsed:layerName};
-      setSatStatus(layerKey,'live',`${selectedDate} · ${layerName.split('_').slice(0,2).join('/')}`);
-      document.getElementById('date-status').textContent=selectedDate;
+      setSatStatus(layerKey,'live',`${date} · ${layerName.split('_').slice(0,2).join('/')}`);
+      document.getElementById('date-status').textContent=date;
       loaded=true;
       drawSatellite();
       
@@ -712,8 +721,43 @@ async function loadSatLayer(layerKey){
   }
   
   if(!loaded){
-    satCache[layerKey]={img:null,key:'',status:'err'};
-    setSatStatus(layerKey,'err','No data for this date — try another');
+    // For SST: step back day by day up to 12 days to find a valid composite
+    if(layerKey==='sst'){
+      setSatStatus(layerKey,'loading','Searching recent dates...');
+      let found=false;
+      for(let daysBack=1; daysBack<=12 && !found; daysBack++){
+        const d=new Date(selectedDate+'T12:00:00Z');
+        d.setDate(d.getDate()-daysBack);
+        const tryDate=d.toISOString().split('T')[0];
+        try{
+          const res=await fetch('/.netlify/functions/claude',{
+            method:'POST',headers:{'Content-Type':'application/json'},
+            body:JSON.stringify({type:'gibs',layer:GIBS_LAYERS.sst[0],date:tryDate,
+              west:b.west.toFixed(4),south:b.south.toFixed(4),
+              east:b.east.toFixed(4),north:b.north.toFixed(4),width:W,height:H})
+          });
+          if(!res.ok) continue;
+          const data=await res.json();
+          if(data.error||!data.image) continue;
+          const img=new Image();
+          await new Promise((resolve,reject)=>{img.onload=resolve;img.onerror=reject;img.src=`data:image/png;base64,${data.image}`;setTimeout(()=>reject(),6000);});
+          const tc3=document.createElement('canvas');tc3.width=32;tc3.height=32;
+          const ctx3=tc3.getContext('2d');ctx3.drawImage(img,0,0,32,32);
+          const px2=ctx3.getImageData(2,2,28,28).data;
+          let nb=0;for(let pi=0;pi<px2.length;pi+=4)if(px2[pi+3]>20&&(px2[pi]>8||px2[pi+1]>8||px2[pi+2]>8))nb++;
+          if(nb>10){
+            satCache[layerKey]={img,key:cacheKey,status:'live'};
+            setSatStatus(layerKey,'live',`${tryDate} · MUR SST (${daysBack}d ago)`);
+            document.getElementById('date-status').textContent=tryDate;
+            found=true;drawSatellite();
+          }
+        }catch(e){continue;}
+      }
+      if(!found){satCache[layerKey]={img:null,key:'',status:'err'};setSatStatus(layerKey,'err','No SST data in last 12 days');}
+    } else {
+      satCache[layerKey]={img:null,key:'',status:'err'};
+      setSatStatus(layerKey,'err','No data for this date — try another');
+    }
   }
 }
 
