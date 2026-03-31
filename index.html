@@ -174,6 +174,18 @@ input[type=range].rng.sst-rng::-moz-range-thumb{background:var(--hot);}
 .rng-reset{font-family:'Space Mono';font-size:7px;color:var(--muted);background:transparent;border:none;cursor:pointer;padding:0;text-decoration:underline;}
 .rng-reset:hover{color:var(--teal);}
 
+/* Chlorophyll source picker */
+.src-btn{
+  font-family:'Space Mono';font-size:8px;padding:4px 2px;border-radius:4px;
+  border:1px solid var(--border);background:transparent;color:var(--muted);
+  cursor:pointer;transition:all .15s;text-align:center;
+}
+.src-btn:hover{border-color:var(--muted);color:var(--text);}
+.src-btn.active{
+  border-color:var(--bait);background:#5dffaa18;color:var(--bait);
+  box-shadow:0 0 6px #5dffaa22;
+}
+
 /* Key modal */
 #key-modal{display:none;position:fixed;inset:0;z-index:9999;background:#000c;backdrop-filter:blur(8px);align-items:center;justify-content:center;}
 .km-box{background:var(--panel);border:1px solid var(--border);border-radius:10px;padding:28px;width:400px;max-width:90vw;}
@@ -215,16 +227,28 @@ input[type=range].rng.sst-rng::-moz-range-thumb{background:var(--hot);}
       <div class="sb-ttl">Satellite Layers</div>
 
       <!-- Chlorophyll -->
+      <!-- Chlorophyll with multi-source picker -->
       <div class="layer-btn active" id="btn-chl" onclick="toggleSat('chl')">
         <div class="lb-left">
           <div class="lb-dot" style="background:#5dffaa;box-shadow:0 0 5px #5dffaa66"></div>
           <span>Chlorophyll-a</span>
         </div>
-        <span class="lb-src">VIIRS/NASA</span>
+        <span class="lb-src" id="chl-src-lbl">NOAA-20</span>
         <div class="tog on" id="tog-chl"></div>
       </div>
       <div class="sat-badge idle" id="sb-chl"><div class="dot"></div><span id="sl-chl">Not loaded</span></div>
-      <div class="rng-row" style="margin-top:4px">
+
+      <!-- Source picker grid -->
+      <div id="chl-src-grid" style="display:grid;grid-template-columns:1fr 1fr;gap:3px;margin:4px 0 6px;padding:0 2px">
+        <button class="src-btn active" id="src-n20"  onclick="setChlSource('n20')" title="NOAA-20 VIIRS · Daily 1km · Dec 2017–now">NOAA-20</button>
+        <button class="src-btn"        id="src-n21"  onclick="setChlSource('n21')" title="NOAA-21 VIIRS · Daily 1km · Mar 2023–now">NOAA-21</button>
+        <button class="src-btn"        id="src-snpp" onclick="setChlSource('snpp')" title="Suomi NPP VIIRS · Daily 1km · 2012–now">S-NPP</button>
+        <button class="src-btn"        id="src-s3a"  onclick="setChlSource('s3a')" title="Sentinel-3A OLCI · Daily 1km · Apr 2016–now">S-3A</button>
+        <button class="src-btn"        id="src-s3b"  onclick="setChlSource('s3b')" title="Sentinel-3B OLCI · Daily 1km · May 2018–now">S-3B</button>
+        <button class="src-btn"        id="src-modA" onclick="setChlSource('modA')" title="MODIS Aqua · Daily 4km · 2002–2022">MODIS Aq</button>
+      </div>
+
+      <div class="rng-row" style="margin-top:2px">
         <span class="rng-tag">α</span>
         <input type="range" class="rng" id="chl-alpha-q" min="0.1" max="1" step="0.05" value="0.85" oninput="onLayerAlpha('chl-q')">
         <span class="rng-vals" id="chl-alpha-q-lbl">85%</span>
@@ -539,8 +563,19 @@ input[type=range].rng.sst-rng::-moz-range-thumb{background:var(--hot);}
 // CONSTANTS & STATE
 // ═══════════════════════════════════════════
 const GIBS = 'https://gibs.earthdata.nasa.gov/wms/epsg4326/best/wms.cgi';
+// All available chlorophyll sources — switchable at runtime
+const CHL_SOURCES = {
+  n20:  { layer:'VIIRS_NOAA20_Chlorophyll_A',          label:'NOAA-20',   desc:'VIIRS NOAA-20 · 1km · daily · Dec 2017–now' },
+  n21:  { layer:'VIIRS_NOAA21_Chlorophyll_A',          label:'NOAA-21',   desc:'VIIRS NOAA-21 · 1km · daily · Mar 2023–now' },
+  snpp: { layer:'VIIRS_SNPP_Chlorophyll_A',            label:'Suomi-NPP', desc:'VIIRS S-NPP · 1km · daily · 2012–now' },
+  s3a:  { layer:'Sentinel_3A_OLCI_Chlorophyll_A',      label:'Sentinel-3A', desc:'Sentinel-3A OLCI · 1km · daily · Apr 2016–now' },
+  s3b:  { layer:'Sentinel_3B_OLCI_Chlorophyll_A',      label:'Sentinel-3B', desc:'Sentinel-3B OLCI · 1km · daily · May 2018–now' },
+  modA: { layer:'MODIS_Aqua_Chlorophyll_A',            label:'MODIS Aqua', desc:'MODIS Aqua · 4km · daily · 2002–2022 only' },
+};
+let activeChlSrc = 'n20'; // currently selected source
+
 const GIBS_LAYERS = {
-  chl: 'VIIRS_NOAA20_Chlorophyll_A',             // NOAA-20 VIIRS Chlorophyll-a, daily 1km (active)
+  chl: CHL_SOURCES.n20.layer,
   sst: 'GHRSST_L4_MUR_Sea_Surface_Temperature',  // MUR L4 SST, daily gap-filled (always has data)
   tc:  'VIIRS_NOAA20_CorrectedReflectance_TrueColor' // NOAA-20 True color daily
 };
@@ -586,6 +621,28 @@ function updateKeyIndicator(){
   else{dot.style.background='var(--hot)';lbl.textContent='API Key';}
 }
 function showKeyModal(){document.getElementById('key-input').value=localStorage.getItem('bwi_key')||'';document.getElementById('key-modal').style.display='flex';}
+
+// ── Chlorophyll source switcher ──
+function setChlSource(key){
+  if(!CHL_SOURCES[key]) return;
+  activeChlSrc = key;
+  GIBS_LAYERS.chl = CHL_SOURCES[key].layer;
+
+  // Update button states
+  Object.keys(CHL_SOURCES).forEach(k=>{
+    const btn = document.getElementById('src-'+k);
+    if(btn) btn.classList.toggle('active', k===key);
+  });
+  // Update sidebar label
+  const lbl = document.getElementById('chl-src-lbl');
+  if(lbl) lbl.textContent = CHL_SOURCES[key].label;
+
+  // Bust cache and reload
+  satCache.chl = {img:null, key:'', status:'idle'};
+  detectedFronts = null; microEddies = [];
+  setSatStatus('chl','idle','Switching source...');
+  if(satLayers.chl) loadSatLayer('chl').then(drawSatellite);
+}
 function closeKeyModal(){document.getElementById('key-modal').style.display='none';}
 function saveKey(){const v=document.getElementById('key-input').value.trim();if(!v.startsWith('sk-ant-'))return;localStorage.setItem('bwi_key',v);closeKeyModal();updateKeyIndicator();}
 document.addEventListener('keydown',e=>{if(e.key==='Escape')closeKeyModal();if(e.key==='Enter'&&document.getElementById('key-modal').style.display==='flex')saveKey();});
