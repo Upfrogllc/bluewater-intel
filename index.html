@@ -265,7 +265,7 @@ html,body{height:100%;overflow:hidden;background:#000;color:var(--text);font-fam
       <div class="layer-btn" id="btn-mld" onclick="toggleLayer('mld')">
         <div class="lb-left">
           <div class="lb-dot" style="background:#cc88ff;box-shadow:0 0 5px #cc88ff66"></div>
-          <span>SSH / Thermocline</span>
+          <span>Mixed Layer Depth</span>
         </div>
         <span class="lb-src">HYCOM</span>
         <div class="tog" id="tog-mld"></div>
@@ -309,7 +309,7 @@ html,body{height:100%;overflow:hidden;background:#000;color:var(--text);font-fam
       <div style="font-family:'Space Mono';font-size:8px;color:var(--muted);margin:8px 0 4px">Depth</div>
       <div class="lgnd-bar" style="background:linear-gradient(to right,#a0c8f0,#3070b8,#0c3080,#050e1e)"></div>
       <div class="lgnd-ends"><span>10ft</span><span>100ft</span><span>500ft</span><span>2000ft</span></div>
-      <div style="font-family:'Space Mono';font-size:8px;color:var(--muted);margin:8px 0 4px">Thermocline Depth (MLD)</div>
+      <div style="font-family:'Space Mono';font-size:8px;color:var(--muted);margin:8px 0 4px">Mixed Layer Depth · CMEMS</div>
       <div class="lgnd-bar" style="background:linear-gradient(to right,#ff32dc,#6464ff,#00c8c8,#00dc96)"></div>
       <div class="lgnd-ends"><span>↑ Upwell</span><span>Neutral</span><span>Warm ↓</span></div>
     </div>
@@ -883,8 +883,54 @@ function drawMLD(){
   const W=cvs.width, H=cvs.height;
   ctx.save();
 
-  // ── Build spatial index for fast nearest-neighbor lookup ──
-  // Render a downsampled heatmap then upscale — much faster than per-pixel
+  // ── If we have the raw WMS image, draw it directly then add contour labels ──
+  if(mldGrid._img){
+    ctx.globalAlpha=0.72;
+    ctx.drawImage(mldGrid._img,0,0,W,H);
+    ctx.globalAlpha=1.0;
+
+    // Value labels when zoomed in
+    if(vp.scale>2.0){
+      ctx.font='8px "Space Mono",monospace';
+      ctx.textAlign='center';
+      for(const pt of mldGrid){
+        const[x,y]=geoToCanvas(pt.lat,pt.lng);
+        if(x<20||x>W-20||y<20||y>H-20) continue;
+        ctx.fillStyle='rgba(255,255,255,0.9)';
+        ctx.shadowColor='rgba(0,0,0,0.8)';ctx.shadowBlur=2;
+        ctx.fillText(Math.round(pt.mld_m)+'m',x,y+3);
+        ctx.shadowBlur=0;
+      }
+      ctx.textAlign='left';
+    }
+
+    // Legend
+    ctx.shadowColor='rgba(0,0,0,0.9)';ctx.shadowBlur=4;
+    ctx.font='bold 9px "Space Mono",monospace';
+    ctx.fillStyle='rgba(255,255,255,0.95)';
+    ctx.fillText('MIXED LAYER DEPTH · CMEMS (mlotst)',10,30);
+    ctx.shadowBlur=0;
+    const lx=10,ly=42,lw=180;
+    const grad=ctx.createLinearGradient(lx,0,lx+lw,0);
+    grad.addColorStop(0,'rgba(68,1,84,0.95)');    // viridis: deep purple = shallow
+    grad.addColorStop(0.25,'rgba(59,82,139,0.95)');
+    grad.addColorStop(0.5,'rgba(33,145,140,0.95)');
+    grad.addColorStop(0.75,'rgba(94,201,98,0.95)');
+    grad.addColorStop(1,'rgba(253,231,37,0.95)'); // yellow = deep MLD
+    ctx.fillStyle=grad;
+    ctx.fillRect(lx,ly,lw,7);
+    ctx.font='7px "Space Mono",monospace';
+    ctx.fillStyle='rgba(255,255,255,0.95)';
+    ctx.shadowColor='rgba(0,0,0,0.8)';ctx.shadowBlur=2;
+    ctx.fillText('0m (shallow)',lx,ly+16);
+    ctx.fillText('~100m',lx+lw/2-14,ly+16);
+    ctx.fillText('200m+ (deep)',lx+lw-48,ly+16);
+    ctx.shadowBlur=0;
+    ctx.restore();
+    return;
+  }
+
+  // ── Fallback: interpolated heatmap from sampled points ──
   const STEP = Math.max(3, Math.round(Math.min(W,H)/180)); // ~180 samples per axis
   const offW = Math.ceil(W/STEP), offH = Math.ceil(H/STEP);
   const offCvs = document.createElement('canvas');
