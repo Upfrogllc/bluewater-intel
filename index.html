@@ -348,23 +348,6 @@ input[type=range].rng.sst-rng::-moz-range-thumb{background:var(--hot);}
         <div class="tog on" id="tog-edy"></div>
       </div>
 
-      <div class="layer-btn active" id="btn-dep" onclick="toggleLayer('dep')">
-        <div class="lb-left">
-          <div class="lb-dot" style="background:#5577cc;box-shadow:0 0 5px #5577cc66"></div>
-          <span>Depth Contours</span>
-        </div>
-        <span class="lb-src">NOAA</span>
-        <div class="tog on" id="tog-dep"></div>
-      </div>
-
-      <div class="layer-btn active" id="btn-gs" onclick="toggleLayer('gs')">
-        <div class="lb-left">
-          <div class="lb-dot" style="background:#f5a623;box-shadow:0 0 5px #f5a62366"></div>
-          <span>Gulf Stream</span>
-        </div>
-        <span class="lb-src">Modeled</span>
-        <div class="tog on" id="tog-gs"></div>
-      </div>
 
       <div class="layer-btn active" id="btn-me" onclick="toggleLayer('me')">
         <div class="lb-left">
@@ -681,7 +664,7 @@ const satCache = {chl:{img:null,key:'',status:'idle'}, sst:{img:null,key:'',stat
 const satLayers = {chl:true, sst:true, tc:false};
 let noaaChartOn = false;
 let noaaChartCache = {img:null, key:''};
-const layers    = {cur:true, edy:true, dep:true, gs:true, frt:true, me:true};
+const layers    = {cur:true, edy:true, frt:true, me:true};
 
 // Date state — default to yesterday (most recent satellite data with processing lag)
 // NOAA-20/21 are available within ~3hrs of overpass but we default to yesterday for safety
@@ -1789,10 +1772,10 @@ function draw(){
   ctx.restore();
 
   // Depth contours
-  if(layers.dep) drawDepthContours();
+  // depth contours removed
 
   // Gulf Stream edge
-  if(layers.gs){
+  if(false){ // gulf stream removed
     ctx.save();ctx.beginPath();first=true;
     for(let lat=vp.lat+BASE_DLAT/vp.scale+0.1;lat>=vp.lat-BASE_DLAT/vp.scale-0.1;lat-=0.05){
       const gsLng=-80.15+(lat-27.3)*0.12+Math.sin(lat*3.5+t*0.3)*0.07;
