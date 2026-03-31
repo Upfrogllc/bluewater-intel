@@ -200,6 +200,54 @@ input[type=range].rng.sst-rng::-moz-range-thumb{background:var(--hot);}
 .km-save:hover{background:var(--bait);}
 .km-skip{padding:11px 14px;border-radius:6px;background:transparent;border:1px solid var(--border);color:var(--muted);font-family:'Space Mono';font-size:9px;cursor:pointer;}
 
+/* ── Panel tabs ── */
+#panel-tabs{display:flex;border-bottom:1px solid var(--border);flex-shrink:0;}
+.ptab{flex:1;padding:8px 4px;font-family:'Bebas Neue';font-size:13px;letter-spacing:1.5px;text-align:center;cursor:pointer;color:var(--muted);border-bottom:2px solid transparent;transition:all .2s;}
+.ptab.active{color:var(--teal);border-bottom-color:var(--teal);}
+.ptab:hover:not(.active){color:var(--text);}
+#wx-panel{display:none;flex:1;overflow-y:auto;padding:12px;}
+#wx-panel.show{display:block;}
+#aipanel-inner{display:flex;flex-direction:column;flex:1;overflow:hidden;}
+
+/* ── Wind / Wave cards ── */
+.wx-now{display:grid;grid-template-columns:1fr 1fr;gap:6px;margin-bottom:12px;}
+.wx-card{background:#ffffff06;border:1px solid var(--border);border-radius:6px;padding:8px 10px;text-align:center;}
+.wx-card.wide{grid-column:1/-1;}
+.wx-val{font-family:'Bebas Neue';font-size:26px;line-height:1;color:var(--teal);}
+.wx-val.hot{color:var(--hot);}
+.wx-val.warm{color:var(--warm);}
+.wx-val.cold{color:var(--cold);}
+.wx-unit{font-family:'Space Mono';font-size:8px;color:var(--muted);margin-top:1px;}
+.wx-lbl{font-family:'Space Mono';font-size:7px;color:var(--muted);letter-spacing:1px;margin-bottom:3px;}
+.wx-section{font-family:'Bebas Neue';font-size:11px;letter-spacing:2px;color:var(--warm);margin:10px 0 6px;padding-top:8px;border-top:1px solid var(--border);}
+
+/* ── Forecast table ── */
+.fx-table{width:100%;border-collapse:collapse;font-family:'Space Mono';font-size:8px;}
+.fx-table th{color:var(--muted);font-weight:normal;padding:3px 4px;border-bottom:1px solid var(--border);text-align:right;}
+.fx-table th:first-child{text-align:left;}
+.fx-table td{padding:4px 4px;border-bottom:1px solid #ffffff06;text-align:right;color:var(--text);}
+.fx-table td:first-child{color:var(--muted);text-align:left;}
+.fx-table tr:hover td{background:#ffffff08;}
+.fx-table .hi{color:var(--hot);}
+.fx-table .md{color:var(--warm);}
+.fx-table .lo{color:var(--cold);}
+.fx-table .bait{color:var(--bait);}
+
+/* ── Wind rose canvas ── */
+#wind-rose-wrap{display:flex;justify-content:center;margin:8px 0;}
+#wind-rose{display:block;}
+
+/* ── Wave bar chart ── */
+#wave-chart-wrap{position:relative;height:80px;margin:6px 0;}
+#wave-chart{width:100%;height:80px;display:block;}
+
+/* ── Go/No-Go banner ── */
+.gng-banner{border-radius:6px;padding:8px 12px;margin-bottom:10px;font-family:'Space Mono';font-size:9px;line-height:1.6;}
+.gng-go{background:#5dffaa15;border:1px solid #5dffaa44;color:var(--bait);}
+.gng-caution{background:#f5a62315;border:1px solid #f5a62344;color:var(--warm);}
+.gng-no{background:#ff4e2a15;border:1px solid #ff4e2a44;color:var(--hot);}
+.gng-title{font-family:'Bebas Neue';font-size:14px;letter-spacing:2px;display:block;margin-bottom:3px;}
+
 /* ── Map toolbar (info / measure buttons) ── */
 #map-toolbar{position:absolute;top:10px;left:14px;z-index:10;display:flex;flex-direction:column;gap:3px;}
 .tbtn{width:32px;height:32px;background:var(--panel2);border:1px solid var(--border);color:var(--muted);font-size:14px;cursor:pointer;display:flex;align-items:center;justify-content:center;border-radius:4px;transition:all .2s;backdrop-filter:blur(8px);position:relative;}
@@ -586,9 +634,13 @@ input[type=range].rng.sst-rng::-moz-range-thumb{background:var(--hot);}
   <div id="aipanel">
     <div id="aihdr">
       <div class="aiico">🤖</div>
-      <div><div class="aittl">AI Fish Intel</div><div class="aisub">Claude · Real Satellite Data</div></div>
+      <div><div class="aittl">BlueWater Intel</div><div class="aisub">AI · Satellite · Marine Wx</div></div>
     </div>
-
+    <!-- Tab bar -->
+    <div id="panel-tabs">
+      <div class="ptab active" id="tab-fish" onclick="switchTab('fish')">🎣 Fish Intel</div>
+      <div class="ptab" id="tab-wx" onclick="switchTab('wx')">🌊 Wind &amp; Waves</div>
+    </div>
     <!-- SPECIES SELECTOR -->
     <div id="species-panel" style="padding:10px 14px 6px;border-bottom:1px solid var(--border);flex-shrink:0;">
       <div style="font-family:'Bebas Neue';font-size:11px;letter-spacing:2px;color:var(--warm);margin-bottom:2px;">Target Species</div>
@@ -2137,7 +2189,7 @@ function updateStats(){
 }
 
 async function fetchAllData(){
-  await Promise.all([fetchCurrentData(), loadAllSatellite()]);
+  await Promise.all([fetchCurrentData(), loadAllSatellite(), fetchWeather()]);
 }
 
 // ═══════════════════════════════════════════
@@ -2789,6 +2841,359 @@ function renderResults(data){
   if(data.pro_tip)html+=`<div class="ptip"><div class="ptip-h">💡 Pro Tip</div><div class="ptip-t">${data.pro_tip}</div></div>`;
   html+=`<div class="aiftr">Tap card to pan · Sat: ${selectedDate} · ${dataFetchTime?dataFetchTime.toLocaleTimeString():'—'}</div>`;
   document.getElementById('aibody').innerHTML=html;
+}
+
+// ═══════════════════════════════════════════
+// PANEL TABS
+// ═══════════════════════════════════════════
+function switchTab(tab){
+  document.getElementById('tab-fish').classList.toggle('active', tab==='fish');
+  document.getElementById('tab-wx').classList.toggle('active', tab==='wx');
+  // Show/hide species panel + aibody vs wx panel
+  const fishEls = ['species-panel','aibody'];
+  const wxEl = document.getElementById('wx-panel');
+  fishEls.forEach(id=>{
+    const el=document.getElementById(id);
+    if(el) el.style.display = tab==='fish' ? '' : 'none';
+  });
+  wxEl.classList.toggle('show', tab==='wx');
+  if(tab==='wx' && !wxWeatherData) fetchWeather();
+}
+
+// ═══════════════════════════════════════════
+// WIND & WAVE DATA — Open-Meteo
+// ═══════════════════════════════════════════
+let wxWeatherData = null; // cached fetch result
+
+// Fetch for Port St. Lucie offshore (~27.2°N, 80.0°W)
+const WX_LAT = 27.2, WX_LNG = -80.0;
+
+async function fetchWeather(){
+  const body = document.getElementById('wx-body');
+  body.innerHTML = `<div style="padding:20px;text-align:center;font-family:'Space Mono';font-size:9px;color:var(--muted)"><div class="spin" style="width:20px;height:20px;margin:0 auto 10px;border-width:3px"></div>Fetching marine forecast...</div>`;
+
+  try{
+    // Run wind+atmos and marine wave fetches in parallel
+    const [windRes, marineRes] = await Promise.all([
+      fetch(`https://api.open-meteo.com/v1/forecast?latitude=${WX_LAT}&longitude=${WX_LNG}&current=wind_speed_10m,wind_direction_10m,wind_gusts_10m,precipitation,weather_code,apparent_temperature,pressure_msl,visibility&hourly=wind_speed_10m,wind_direction_10m,wind_gusts_10m,precipitation_probability,precipitation&forecast_days=7&wind_speed_unit=kn&timezone=America%2FNew_York`),
+      fetch(`https://marine-api.open-meteo.com/v1/marine?latitude=${WX_LAT}&longitude=${WX_LNG}&current=wave_height,wave_direction,wave_period,wind_wave_height,wind_wave_period,swell_wave_height,swell_wave_direction,swell_wave_period&hourly=wave_height,wave_direction,wave_period,wind_wave_height,swell_wave_height,swell_wave_period,swell_wave_direction&forecast_days=7&timezone=America%2FNew_York`)
+    ]);
+    if(!windRes.ok || !marineRes.ok) throw new Error('API error');
+    const [wind, marine] = await Promise.all([windRes.json(), marineRes.json()]);
+    wxWeatherData = { wind, marine, fetched: new Date() };
+    renderWeather();
+  }catch(e){
+    body.innerHTML = `<div style="padding:20px;text-align:center;font-family:'Space Mono';font-size:9px;color:var(--hot)">⚠ ${e.message}<br><button onclick="fetchWeather()" style="margin-top:10px;padding:5px 10px;border-radius:4px;border:1px solid var(--border);background:transparent;color:var(--muted);font-family:'Space Mono';font-size:8px;cursor:pointer">Retry</button></div>`;
+  }
+}
+
+// WMO weather code → description + emoji
+function wmoDesc(code){
+  if(code===0)return['☀️','Clear'];
+  if(code<=2)return['⛅','Partly cloudy'];
+  if(code===3)return['☁️','Overcast'];
+  if(code<=49)return['🌫️','Fog/mist'];
+  if(code<=59)return['🌦️','Drizzle'];
+  if(code<=69)return['🌧️','Rain'];
+  if(code<=79)return['❄️','Snow/sleet'];
+  if(code<=82)return['🌦️','Showers'];
+  if(code<=84)return['🌨️','Snow showers'];
+  if(code<=99)return['⛈️','Thunderstorm'];
+  return['🌡️','Unknown'];
+}
+
+// Compass direction from degrees
+function degToCompass(d){
+  const dirs=['N','NNE','NE','ENE','E','ESE','SE','SSE','S','SSW','SW','WSW','W','WNW','NW','NNW'];
+  return dirs[Math.round(((d%360)+360)%360/22.5)%16];
+}
+
+// Go/No-Go assessment for offshore fishing
+function goNoGo(windKt, waveM, swellM, precipPct){
+  const waveFt = waveM * 3.281;
+  const swellFt = swellM * 3.281;
+  const issues=[], good=[];
+  if(windKt > 25){ issues.push(`Wind ${windKt.toFixed(0)}kt — rough`); }
+  else if(windKt > 15){ issues.push(`Wind ${windKt.toFixed(0)}kt — choppy`); }
+  else good.push(`Wind ${windKt.toFixed(0)}kt`);
+  if(waveFt > 6){ issues.push(`Seas ${waveFt.toFixed(1)}ft — dangerous`); }
+  else if(waveFt > 4){ issues.push(`Seas ${waveFt.toFixed(1)}ft — rough`); }
+  else good.push(`Seas ${waveFt.toFixed(1)}ft`);
+  if(swellFt > 5) issues.push(`Swell ${swellFt.toFixed(1)}ft`);
+  else good.push(`Swell ${swellFt.toFixed(1)}ft`);
+  if(precipPct > 60) issues.push(`${precipPct}% rain chance`);
+  const serious = issues.filter(i=>i.includes('dangerous')||i.includes('rough')||i.includes('>25'));
+  if(waveFt>6||windKt>25) return {cls:'gng-no', icon:'🔴', label:'STAY HOME', txt: issues.join(' · ')};
+  if(waveFt>4||windKt>15) return {cls:'gng-caution', icon:'🟡', label:'USE CAUTION', txt:[...issues,...good].join(' · ')};
+  return {cls:'gng-go', icon:'🟢', label:'GO FISHING', txt:[...good,...issues].join(' · ')};
+}
+
+function renderWeather(){
+  const { wind, marine, fetched } = wxWeatherData;
+  const W = wind.current, M = marine.current;
+  const wkn = W.wind_speed_10m, wdir = W.wind_direction_10m, wgust = W.wind_gusts_10m;
+  const waveH = M.wave_height, wavePer = M.wave_period, waveDir = M.wave_direction;
+  const swellH = M.swell_wave_height, swellPer = M.swell_wave_period, swellDir = M.swell_wave_direction;
+  const windWaveH = M.wind_wave_height, windWavePer = M.wind_wave_period;
+  const [wxEmoji, wxDesc] = wmoDesc(W.weather_code);
+  const waveFt = (waveH*3.281).toFixed(1);
+  const swellFt = (swellH*3.281).toFixed(1);
+  const windWaveFt = (windWaveH*3.281).toFixed(1);
+
+  // Get next 24h precip probability average for Go/No-Go
+  const next24Precip = wind.hourly.precipitation_probability.slice(0,24);
+  const maxPrecip = Math.max(...next24Precip);
+  const gng = goNoGo(wkn, waveH, swellH, maxPrecip);
+
+  let html = '';
+
+  // Go / No-Go
+  html += `<div class="gng-banner ${gng.cls}">
+    <span class="gng-title">${gng.icon} ${gng.label}</span>
+    ${gng.txt}
+  </div>`;
+
+  // Current conditions grid
+  html += `<div class="wx-now">
+    <div class="wx-card">
+      <div class="wx-lbl">WIND</div>
+      <div class="wx-val ${wkn>20?'hot':wkn>10?'warm':'cold'}">${wkn.toFixed(0)}<span style="font-size:14px">kt</span></div>
+      <div class="wx-unit">${degToCompass(wdir)} (${Math.round(wdir)}°)</div>
+    </div>
+    <div class="wx-card">
+      <div class="wx-lbl">GUSTS</div>
+      <div class="wx-val ${wgust>25?'hot':wgust>15?'warm':'cold'}">${wgust.toFixed(0)}<span style="font-size:14px">kt</span></div>
+      <div class="wx-unit">Max gust</div>
+    </div>
+    <div class="wx-card">
+      <div class="wx-lbl">COMBINED SEAS</div>
+      <div class="wx-val ${parseFloat(waveFt)>6?'hot':parseFloat(waveFt)>4?'warm':'bait'}">${waveFt}<span style="font-size:14px">ft</span></div>
+      <div class="wx-unit">${degToCompass(waveDir)} · ${wavePer.toFixed(1)}s period</div>
+    </div>
+    <div class="wx-card">
+      <div class="wx-lbl">CONDITIONS</div>
+      <div class="wx-val" style="font-size:20px">${wxEmoji}</div>
+      <div class="wx-unit">${wxDesc}</div>
+    </div>
+  </div>`;
+
+  // Wind rose canvas
+  html += `<div class="wx-section">WIND DIRECTION</div>
+  <div id="wind-rose-wrap"><canvas id="wind-rose" width="160" height="160"></canvas></div>`;
+
+  // Swell breakdown
+  html += `<div class="wx-section">SWELL BREAKDOWN</div>
+  <div class="wx-now">
+    <div class="wx-card">
+      <div class="wx-lbl">SWELL HEIGHT</div>
+      <div class="wx-val warm">${swellFt}<span style="font-size:12px">ft</span></div>
+      <div class="wx-unit">${degToCompass(swellDir)} · ${swellPer.toFixed(1)}s</div>
+    </div>
+    <div class="wx-card">
+      <div class="wx-lbl">WIND WAVES</div>
+      <div class="wx-val cold">${windWaveFt}<span style="font-size:12px">ft</span></div>
+      <div class="wx-unit">${windWavePer.toFixed(1)}s period</div>
+    </div>
+    <div class="wx-card">
+      <div class="wx-lbl">PRESSURE</div>
+      <div class="wx-val">${W.pressure_msl.toFixed(0)}<span style="font-size:12px">mb</span></div>
+      <div class="wx-unit">${W.pressure_msl>1013?'High press':'Low press'}</div>
+    </div>
+    <div class="wx-card">
+      <div class="wx-lbl">PRECIP CHANCE</div>
+      <div class="wx-val ${maxPrecip>60?'hot':maxPrecip>30?'warm':'bait'}">${maxPrecip}<span style="font-size:12px">%</span></div>
+      <div class="wx-unit">Next 24h max</div>
+    </div>
+  </div>`;
+
+  // Wave sparkline chart
+  html += `<div class="wx-section">48h SEAS FORECAST</div>
+  <div id="wave-chart-wrap"><canvas id="wave-chart"></canvas></div>`;
+
+  // 7-day hourly forecast table — show every 3h for 5 days
+  const times = wind.hourly.time;
+  const wSpd  = wind.hourly.wind_speed_10m;
+  const wDir  = wind.hourly.wind_direction_10m;
+  const wGust = wind.hourly.wind_gusts_10m;
+  const wvH   = marine.hourly.wave_height;
+  const wvP   = marine.hourly.wave_period;
+  const swH   = marine.hourly.swell_wave_height;
+  const swP   = marine.hourly.swell_wave_period;
+  const swD   = marine.hourly.swell_wave_direction;
+  const precP = wind.hourly.precipitation_probability;
+
+  html += `<div class="wx-section">7-DAY HOURLY FORECAST</div>
+  <div style="overflow-x:auto">
+  <table class="fx-table">
+    <tr>
+      <th>Time</th><th>Wind</th><th>Gust</th><th>Seas</th><th>Per</th><th>Swell</th><th>Per</th><th>🌧</th>
+    </tr>`;
+
+  // Every 3h, up to 120 hours (5 days)
+  let prevDay='';
+  for(let i=0; i<Math.min(times.length, 120); i+=3){
+    const dt = new Date(times[i]);
+    const day = dt.toLocaleDateString('en-US',{weekday:'short',month:'numeric',day:'numeric'});
+    const hr  = dt.toLocaleTimeString('en-US',{hour:'numeric',hour12:true});
+    const spd = wSpd[i], gust = wGust[i], seas = (wvH[i]*3.281).toFixed(1);
+    const per = wvP[i]?.toFixed(0)||'—', sw = ((swH[i]||0)*3.281).toFixed(1);
+    const sp = (swP[i]||0).toFixed(0), sd = degToCompass(swD[i]||0);
+    const pp = precP[i]||0;
+    const spdClass = spd>20?'hi':spd>12?'md':'lo';
+    const seasClass= parseFloat(seas)>6?'hi':parseFloat(seas)>4?'md':'bait';
+    const dayHdr = day!==prevDay ? `<tr style="background:#ffffff08"><td colspan="8" style="color:var(--warm);font-family:'Bebas Neue';font-size:10px;letter-spacing:1px;padding:4px 4px">${day}</td></tr>` : '';
+    prevDay=day;
+    html += `${dayHdr}<tr>
+      <td>${hr}</td>
+      <td class="${spdClass}">${spd.toFixed(0)}kt ${degToCompass(wDir[i])}</td>
+      <td class="${gust>25?'hi':gust>15?'md':''}">${gust.toFixed(0)}kt</td>
+      <td class="${seasClass}">${seas}ft</td>
+      <td>${per}s</td>
+      <td>${sw}ft ${sd}</td>
+      <td>${sp}s</td>
+      <td class="${pp>60?'hi':pp>30?'md':''}">${pp}%</td>
+    </tr>`;
+  }
+  html += `</table></div>`;
+
+  html += `<div style="font-family:'Space Mono';font-size:7px;color:var(--muted);margin-top:10px;text-align:center">Open-Meteo · ${fetched.toLocaleTimeString()} · 27.2°N 80.0°W offshore PSL<br><button onclick="fetchWeather()" style="margin-top:5px;padding:4px 10px;border-radius:3px;border:1px solid var(--border);background:transparent;color:var(--muted);font-family:'Space Mono';font-size:7px;cursor:pointer">⟳ Refresh</button></div>`;
+
+  document.getElementById('wx-body').innerHTML = html;
+
+  // Draw wind rose
+  setTimeout(()=>{
+    drawWindRose(wdir, wkn, wgust);
+    drawWaveChart(marine.hourly.wave_height, marine.hourly.swell_wave_height, times);
+  }, 50);
+}
+
+// ── Wind rose canvas drawing ─────────────────────────────────────
+function drawWindRose(windDeg, windKt, gustKt){
+  const canvas = document.getElementById('wind-rose');
+  if(!canvas) return;
+  const ctx2 = canvas.getContext('2d');
+  const W=160, H=160, cx=W/2, cy=H/2, R=58;
+  ctx2.clearRect(0,0,W,H);
+
+  // Background circle rings
+  [0.25,0.5,0.75,1].forEach(r=>{
+    ctx2.beginPath(); ctx2.arc(cx,cy,R*r,0,Math.PI*2);
+    ctx2.strokeStyle='rgba(255,255,255,0.08)'; ctx2.lineWidth=1; ctx2.stroke();
+  });
+
+  // Cardinal spokes
+  const labels=['N','NE','E','SE','S','SW','W','NW'];
+  labels.forEach((lbl,i)=>{
+    const a=(i/8)*Math.PI*2 - Math.PI/2;
+    ctx2.beginPath(); ctx2.moveTo(cx,cy);
+    ctx2.lineTo(cx+Math.cos(a)*R, cy+Math.sin(a)*R);
+    ctx2.strokeStyle='rgba(255,255,255,0.1)'; ctx2.lineWidth=0.5; ctx2.stroke();
+    ctx2.font='8px "Space Mono",monospace';
+    ctx2.fillStyle='rgba(255,255,255,0.4)'; ctx2.textAlign='center'; ctx2.textBaseline='middle';
+    ctx2.fillText(lbl, cx+Math.cos(a)*(R+10), cy+Math.sin(a)*(R+10));
+  });
+
+  // Wind arrow — FROM direction, so arrow points toward where wind is going
+  const fromRad = (windDeg - 90) * Math.PI/180; // offset: 0°=N=up
+  const arrowLen = Math.min(R*0.85, R*0.3 + (windKt/40)*R*0.55);
+  const toX = cx + Math.cos(fromRad)*arrowLen;
+  const toY = cy + Math.sin(fromRad)*arrowLen;
+  const fromX = cx - Math.cos(fromRad)*arrowLen*0.2;
+  const fromY = cy - Math.sin(fromRad)*arrowLen*0.2;
+
+  const col = windKt>20?'#ff4e2a':windKt>12?'#f5a623':'#00d4b8';
+  ctx2.strokeStyle=col; ctx2.lineWidth=3;
+  ctx2.shadowColor=col; ctx2.shadowBlur=8;
+  ctx2.beginPath(); ctx2.moveTo(fromX,fromY); ctx2.lineTo(toX,toY); ctx2.stroke();
+  // Arrowhead
+  const ha=fromRad;
+  ctx2.fillStyle=col;
+  ctx2.beginPath();
+  ctx2.moveTo(toX,toY);
+  ctx2.lineTo(toX-10*Math.cos(ha-0.4), toY-10*Math.sin(ha-0.4));
+  ctx2.lineTo(toX-10*Math.cos(ha+0.4), toY-10*Math.sin(ha+0.4));
+  ctx2.closePath(); ctx2.fill();
+  ctx2.shadowBlur=0;
+
+  // Gust arc
+  const gustR=R*0.35;
+  ctx2.beginPath(); ctx2.arc(cx,cy,gustR,fromRad-0.3,fromRad+0.3);
+  ctx2.strokeStyle=col+'66'; ctx2.lineWidth=4; ctx2.stroke();
+
+  // Center label
+  ctx2.font='bold 13px "Bebas Neue",sans-serif';
+  ctx2.fillStyle=col; ctx2.textAlign='center'; ctx2.textBaseline='middle';
+  ctx2.shadowColor=col; ctx2.shadowBlur=6;
+  ctx2.fillText(`${windKt.toFixed(0)}kt`, cx, cy-7);
+  ctx2.font='8px "Space Mono",monospace'; ctx2.fillStyle='rgba(255,255,255,0.6)'; ctx2.shadowBlur=0;
+  ctx2.fillText(degToCompass(windDeg), cx, cy+8);
+  ctx2.textAlign='left';
+}
+
+// ── 48h wave sparkline ───────────────────────────────────────────
+function drawWaveChart(waveH, swellH, times){
+  const canvas = document.getElementById('wave-chart');
+  if(!canvas) return;
+  const W=canvas.offsetWidth||270, H=80;
+  canvas.width=W; canvas.height=H;
+  const ctx2=canvas.getContext('2d');
+  ctx2.clearRect(0,0,W,H);
+
+  const n = Math.min(48, waveH.length);
+  const wFt = waveH.slice(0,n).map(v=>v*3.281);
+  const sFt = swellH.slice(0,n).map(v=>v*3.281);
+  const maxV = Math.max(8, ...wFt);
+  const pad=6;
+
+  const xp = i=>(i/(n-1))*(W-pad*2)+pad;
+  const yp = v=>H - pad - (v/maxV)*(H-pad*2);
+
+  // Grid lines at 2, 4, 6 ft
+  [2,4,6].forEach(ft=>{
+    if(ft>maxV) return;
+    ctx2.beginPath(); ctx2.moveTo(pad,yp(ft)); ctx2.lineTo(W-pad,yp(ft));
+    ctx2.strokeStyle='rgba(255,255,255,0.07)'; ctx2.lineWidth=1; ctx2.setLineDash([3,3]); ctx2.stroke(); ctx2.setLineDash([]);
+    ctx2.font='7px "Space Mono",monospace'; ctx2.fillStyle='rgba(255,255,255,0.25)'; ctx2.textAlign='left';
+    ctx2.fillText(ft+'ft', pad, yp(ft)-2);
+  });
+
+  // Swell fill
+  ctx2.beginPath(); ctx2.moveTo(xp(0),yp(sFt[0]));
+  for(let i=1;i<n;i++) ctx2.lineTo(xp(i),yp(sFt[i]));
+  ctx2.lineTo(xp(n-1),H); ctx2.lineTo(xp(0),H); ctx2.closePath();
+  ctx2.fillStyle='rgba(245,166,35,0.18)'; ctx2.fill();
+
+  // Swell line
+  ctx2.beginPath(); ctx2.moveTo(xp(0),yp(sFt[0]));
+  for(let i=1;i<n;i++) ctx2.lineTo(xp(i),yp(sFt[i]));
+  ctx2.strokeStyle='rgba(245,166,35,0.7)'; ctx2.lineWidth=1.5; ctx2.stroke();
+
+  // Total wave fill
+  ctx2.beginPath(); ctx2.moveTo(xp(0),yp(wFt[0]));
+  for(let i=1;i<n;i++) ctx2.lineTo(xp(i),yp(wFt[i]));
+  ctx2.lineTo(xp(n-1),H); ctx2.lineTo(xp(0),H); ctx2.closePath();
+  const grad=ctx2.createLinearGradient(0,0,0,H);
+  grad.addColorStop(0,'rgba(0,212,184,0.35)'); grad.addColorStop(1,'rgba(0,212,184,0.05)');
+  ctx2.fillStyle=grad; ctx2.fill();
+
+  // Total wave line
+  ctx2.beginPath(); ctx2.moveTo(xp(0),yp(wFt[0]));
+  for(let i=1;i<n;i++) ctx2.lineTo(xp(i),yp(wFt[i]));
+  ctx2.strokeStyle='var(--teal)'; ctx2.lineWidth=2; ctx2.stroke();
+
+  // Time labels every 12h
+  ctx2.font='7px "Space Mono",monospace'; ctx2.fillStyle='rgba(255,255,255,0.3)'; ctx2.textAlign='center';
+  for(let i=0;i<n;i+=12){
+    const dt=new Date(times[i]);
+    ctx2.fillText(dt.toLocaleTimeString('en-US',{hour:'numeric',hour12:true}), xp(i), H-1);
+  }
+
+  // Legend
+  ctx2.fillStyle='rgba(0,212,184,0.8)'; ctx2.fillRect(W-70,4,18,3);
+  ctx2.fillStyle='rgba(255,255,255,0.5)'; ctx2.textAlign='left'; ctx2.font='7px "Space Mono",monospace';
+  ctx2.fillText('Total seas',W-48,8);
+  ctx2.fillStyle='rgba(245,166,35,0.8)'; ctx2.fillRect(W-70,13,18,3);
+  ctx2.fillText('Swell',W-48,17);
 }
 
 // ═══════════════════════════════════════════
