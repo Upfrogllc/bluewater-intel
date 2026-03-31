@@ -221,6 +221,17 @@ html,body{height:100%;overflow:hidden;background:#000;color:var(--text);font-fam
         <div class="tog" id="tog-tc"></div>
       </div>
       <div class="sat-badge idle" id="sb-tc"><div class="dot"></div><span id="sl-tc">Not loaded</span></div>
+
+      <!-- NOAA Chart -->
+      <div class="layer-btn" id="btn-noaa" onclick="toggleNoaaChart()">
+        <div class="lb-left">
+          <div class="lb-dot" style="background:#aac8ff;box-shadow:0 0 5px #aac8ff66"></div>
+          <span>NOAA Nav Chart</span>
+        </div>
+        <span class="lb-src">ENC</span>
+        <div class="tog" id="tog-noaa"></div>
+      </div>
+      <div class="sat-badge idle" id="sb-noaa"><div class="dot"></div><span id="sl-noaa">Not loaded</span></div>
     </div>
 
     <div class="sb-sec">
@@ -402,6 +413,8 @@ let bgCache=null, bgCacheKey='', contourCache=null, contourCacheKey='';
 // Satellite image cache per layer
 const satCache = {chl:{img:null,key:'',status:'idle'}, sst:{img:null,key:'',status:'idle'}, tc:{img:null,key:'',status:'idle'}};
 const satLayers = {chl:true, sst:true, tc:false};
+let noaaChartOn = false;
+let noaaChartCache = {img:null, key:''};
 const layers    = {cur:true, edy:true, dep:true, gs:true};
 
 // Date state — default to 3 days ago (most reliable satellite data)
@@ -534,9 +547,68 @@ async function loadAllSatellite(){
   drawSatellite();
 }
 
+async function loadNOAAChart(){
+  if(!noaaChartOn) return;
+  const b = getViewBounds();
+  const W = Math.round(satCvs.width), H = Math.round(satCvs.height);
+  const key = `noaa_${b.west.toFixed(3)}_${b.south.toFixed(3)}_${b.east.toFixed(3)}_${b.north.toFixed(3)}_${W}_${H}`;
+  if(noaaChartCache.key === key && noaaChartCache.img) return;
+
+  const badge = document.getElementById('sb-noaa');
+  if(badge) badge.className='sat-badge loading';
+  document.getElementById('sl-noaa').textContent='Fetching ENC chart...';
+
+  try{
+    const res = await fetch('/.netlify/functions/claude',{
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({
+        type:'noaa_chart',
+        west: b.west.toFixed(4), south: b.south.toFixed(4),
+        east: b.east.toFixed(4), north: b.north.toFixed(4),
+        width: W, height: H
+      })
+    });
+    if(!res.ok) throw new Error(`Proxy ${res.status}`);
+    const data = await res.json();
+    if(data.error) throw new Error(data.error);
+    const img = new Image();
+    await new Promise((resolve,reject)=>{
+      img.onload=resolve; img.onerror=reject;
+      img.src=`data:image/png;base64,${data.image}`;
+      setTimeout(()=>reject(new Error('timeout')),20000);
+    });
+    noaaChartCache = {img, key};
+    if(badge) badge.className='sat-badge live';
+    document.getElementById('sl-noaa').textContent='NOAA ENC · live';
+    drawSatellite();
+  } catch(e){
+    noaaChartCache = {img:null, key:''};
+    if(badge) badge.className='sat-badge err';
+    document.getElementById('sl-noaa').textContent=`Failed: ${e.message.slice(0,35)}`;
+    console.warn('NOAA chart failed:', e.message);
+  }
+}
+
+function toggleNoaaChart(){
+  noaaChartOn = !noaaChartOn;
+  document.getElementById('tog-noaa').classList.toggle('on', noaaChartOn);
+  document.getElementById('btn-noaa').classList.toggle('active', noaaChartOn);
+  if(noaaChartOn){
+    loadNOAAChart();
+  } else {
+    noaaChartCache = {img:null, key:''};
+    drawSatellite();
+  }
+}
+
 function drawSatellite(){
   const W=satCvs.width, H=satCvs.height;
   satCtx.clearRect(0,0,W,H);
+
+  // NOAA Nautical Chart — drawn first as base
+  if(noaaChartOn && noaaChartCache.img){
+    try{ satCtx.globalAlpha=1.0; satCtx.drawImage(noaaChartCache.img,0,0,W,H); }catch(e){}
+  }
 
   // Draw true color first (base)
   if(satLayers.tc && satCache.tc.img){
@@ -980,8 +1052,15 @@ function loop(ts){
       loop._lastVKey=vKey;
       bgCacheKey='';contourCacheKey='';
       Object.keys(satCache).forEach(k=>satCache[k].key='');
+      // Only reload NOAA chart if moved significantly (saves bandwidth)
+      const nb=getViewBounds(),lb=noaaChartCache._lastBounds||{};
+      if(Math.abs((nb.west)-(lb.west||99))>0.5||Math.abs((nb.north)-(lb.north||99))>0.5){
+        noaaChartCache={img:null,key:''};
+        noaaChartCache._lastBounds=nb;
+      }
       drawSatellite();
       loadAllSatellite();
+      if(noaaChartOn && !noaaChartCache.img) loadNOAAChart();
     }
   }
   requestAnimationFrame(loop);
