@@ -155,6 +155,68 @@ exports.handler = async (event) => {
       };
     }
 
+    // CoastWatch ERDDAP WMS — 300m native Sentinel-3 OLCI chlorophyll
+    // Sector NH covers 14.88-30.26N (Florida + Gulf Stream) for both S-3A and S-3B
+    // Dataset IDs: noaacwS3AOLCIchlaSectorNHDaily, noaacwS3BOLCIchlaSectorNHDaily
+    if (type === 'coastwatch') {
+      const { dataset, variable, date, west, south, east, north, width, height } = payload;
+      // ERDDAP WMS endpoint for the dataset
+      const wmsBase = `https://coastwatch.noaa.gov/erddap/wms/${dataset}/request`;
+
+      function isValidPNG(buf) {
+        if (buf.byteLength < 200) return false;
+        const b = new Uint8Array(buf.slice(0, 4));
+        return b[0]===0x89 && b[1]===0x50 && b[2]===0x4E && b[3]===0x47;
+      }
+
+      // CoastWatch ERDDAP WMS uses time in ISO format as the DIM_time parameter
+      // Try requested date then yesterday (processing lag only)
+      const tryDates = [date];
+      const d = new Date(date + 'T12:00:00Z');
+      d.setDate(d.getDate() - 1);
+      tryDates.push(d.toISOString().split('T')[0]);
+
+      for (const tryDate of tryDates) {
+        const timeStr = tryDate + 'T12:00:00Z';
+        // ERDDAP WMS GetMap: layer name is "datasetID:variableName"
+        const params = new URLSearchParams({
+          service: 'WMS',
+          version: '1.3.0',
+          request: 'GetMap',
+          layers: `${dataset}:${variable}`,
+          styles: '',
+          crs: 'EPSG:4326',
+          bbox: `${south},${west},${north},${east}`,  // WMS 1.3 lat,lon order
+          width: width,
+          height: height,
+          format: 'image/png',
+          transparent: 'TRUE',
+          time: timeStr
+        });
+        const url = `${wmsBase}?${params}`;
+        try {
+          const res = await fetch(url, { headers: { 'User-Agent': 'BlueWaterIntel/1.0' } });
+          if (!res.ok) continue;
+          const buf = await res.arrayBuffer();
+          if (!isValidPNG(buf)) continue;
+          const b64 = Buffer.from(buf).toString('base64');
+          const usedYesterday = tryDate !== date;
+          return {
+            statusCode: 200, headers: CORS,
+            body: JSON.stringify({
+              image: b64, contentType: 'image/png', date: tryDate,
+              lag: usedYesterday ? '~24hr processing lag' : null,
+              source: 'CoastWatch ERDDAP · 300m native OLCI'
+            })
+          };
+        } catch(e) { continue; }
+      }
+      return {
+        statusCode: 404, headers: CORS,
+        body: JSON.stringify({ error: `No CoastWatch data for ${date} — cloud cover or not yet processed` })
+      };
+    }
+
     // CMEMS MLD — proxy Copernicus Marine Mixed Layer Depth WMS
     if (type === 'cmems_mld') {
       const { west, south, east, north, width, height } = payload;
