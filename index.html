@@ -2216,13 +2216,12 @@ async function fetchAllData(){
 // ═══════════════════════════════════════════
 // INTERACTION
 // ═══════════════════════════════════════════
-function zoom(f){vp.scale=Math.max(1.2,Math.min(12,vp.scale*f));} // min 1.2 = regional view only
+function zoom(f){vp.scale=Math.max(0.3,Math.min(20,vp.scale*f));}
 
 function clampViewport(){
-  // Keep viewport within east coast coverage area
-  const dlat=BASE_DLAT/vp.scale, dlng=BASE_DLNG/vp.scale;
-  vp.lat = Math.max(23.5+dlat, Math.min(42.5-dlat, vp.lat));
-  vp.lng = Math.max(-85.0+dlng, Math.min(-65.0-dlng, vp.lng));
+  // Soft clamp — just prevent going wildly off the map
+  vp.lat = Math.max(15, Math.min(50, vp.lat));
+  vp.lng = Math.max(-100, Math.min(-55, vp.lng));
 }
 cvs.addEventListener('wheel',e=>{
   e.preventDefault();
