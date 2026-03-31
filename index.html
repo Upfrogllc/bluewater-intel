@@ -200,6 +200,16 @@ input[type=range].rng.sst-rng::-moz-range-thumb{background:var(--hot);}
 .km-save:hover{background:var(--bait);}
 .km-skip{padding:11px 14px;border-radius:6px;background:transparent;border:1px solid var(--border);color:var(--muted);font-family:'Space Mono';font-size:9px;cursor:pointer;}
 
+/* Species selector */
+.sp-grid{display:grid;grid-template-columns:1fr 1fr;gap:4px;margin:8px 0 6px;}
+.sp-btn{display:flex;align-items:center;gap:5px;padding:5px 7px;border-radius:5px;border:1px solid var(--border);background:transparent;color:var(--muted);font-family:'Space Mono';font-size:8px;cursor:pointer;transition:all .15s;text-align:left;}
+.sp-btn:hover{border-color:var(--muted);color:var(--text);}
+.sp-btn.on{border-color:var(--warm);background:#f5a62315;color:var(--text);}
+.sp-btn .sp-ico{font-size:13px;flex-shrink:0;}
+.sp-util{display:flex;gap:4px;margin-top:4px;}
+.sp-util button{flex:1;padding:4px;border-radius:3px;border:1px solid var(--border);background:transparent;color:var(--muted);font-family:'Space Mono';font-size:8px;cursor:pointer;}
+.sp-util button:hover{border-color:var(--teal);color:var(--teal);}
+
 ::-webkit-scrollbar{width:3px;}
 ::-webkit-scrollbar-track{background:transparent;}
 ::-webkit-scrollbar-thumb{background:var(--border);border-radius:2px;}
@@ -530,6 +540,19 @@ input[type=range].rng.sst-rng::-moz-range-thumb{background:var(--hot);}
       <div class="aiico">🤖</div>
       <div><div class="aittl">AI Fish Intel</div><div class="aisub">Claude · Real Satellite Data</div></div>
     </div>
+
+    <!-- SPECIES SELECTOR -->
+    <div id="species-panel" style="padding:10px 14px 6px;border-bottom:1px solid var(--border);flex-shrink:0;">
+      <div style="font-family:'Bebas Neue';font-size:11px;letter-spacing:2px;color:var(--warm);margin-bottom:2px;">Target Species</div>
+      <div class="sp-grid" id="sp-grid"><!-- populated by JS --></div>
+      <div class="sp-util">
+        <button onclick="selectAllSpecies()">All</button>
+        <button onclick="clearAllSpecies()" style="border-color:var(--border);">None</button>
+        <button onclick="selectBillfish()" style="border-color:var(--border);">Billfish</button>
+        <button onclick="selectPelagic()" style="border-color:var(--border);">Pelagic</button>
+      </div>
+    </div>
+
     <div id="aibody">
       <div class="aimt">
         <div class="aimt-ico">🛰️</div>
@@ -1937,6 +1960,104 @@ function toggleLayer(key){
 function panTo(lat,lng){vp.lat=lat+0.05;vp.lng=lng+0.25;vp.scale=Math.max(vp.scale,1.5);}
 
 // ═══════════════════════════════════════════
+// SPECIES SELECTOR
+// ═══════════════════════════════════════════
+const SPECIES = [
+  { id:'blue_marlin',   label:'Blue Marlin',   ico:'🔵', color:'#4488ff',
+    sst:[76,86], depth:'1000ft+', chl:'low-moderate',
+    tip:'Warm core eddies, deep blue water, Gulf Stream edge. SST break >78°F.' },
+  { id:'white_marlin',  label:'White Marlin',  ico:'⚪', color:'#aaccff',
+    sst:[72,82], depth:'600ft+',  chl:'moderate',
+    tip:'Canyon edges and 100-fathom curve. Likes current edges and weed lines.' },
+  { id:'sailfish',      label:'Sailfish',      ico:'⛵', color:'#00d4b8',
+    sst:[74,84], depth:'100-300ft', chl:'moderate-high',
+    tip:'Shallow thermocline, nearshore current edges, bait concentrations. SST 76-82°F.' },
+  { id:'swordfish',     label:'Swordfish',     ico:'⚔️', color:'#ff8800',
+    sst:[65,78], depth:'1500ft+', chl:'moderate',
+    tip:'Deep water, night bite near surface. Cold upwelling edges, 1000-fathom drop-offs.' },
+  { id:'mahi',          label:'Mahi-Mahi',     ico:'🐬', color:'#00ff88',
+    sst:[75,85], depth:'100-600ft', chl:'high',
+    tip:'Weed lines, debris, floating objects. High chlorophyll edges. Loves current rips.' },
+  { id:'wahoo',         label:'Wahoo',         ico:'🎣', color:'#ff44ff',
+    sst:[74,84], depth:'300-1000ft', chl:'low-moderate',
+    tip:'Current edges at 100-200 fathoms. Warm clear blue water. High-speed trolling.' },
+  { id:'yellowfin',     label:'Yellowfin Tuna',ico:'🟡', color:'#ffdd00',
+    sst:[72,82], depth:'600ft+',  chl:'moderate',
+    tip:'Temperature breaks, current edges, bait pods. Can mix with billfish at structure.' },
+  { id:'blackfin',      label:'Blackfin Tuna', ico:'⚫', color:'#888888',
+    sst:[70,80], depth:'200-600ft', chl:'moderate-high',
+    tip:'Nearshore humps, color changes, bait balls. Often 50-150ft of water offshore.' },
+  { id:'kingfish',      label:'Kingfish',      ico:'👑', color:'#c8a000',
+    sst:[68,80], depth:'60-200ft', chl:'high',
+    tip:'Nearshore reefs and humps, bait schools. Likes murky green-to-blue transition.' },
+  { id:'cobia',         label:'Cobia',         ico:'🦈', color:'#885500',
+    sst:[68,82], depth:'60-300ft', chl:'high',
+    tip:'Structure, buoys, rays, cobia hover near surface. Spring migration along coast.' },
+  { id:'dolphin',       label:'Dolphin (Mahi)', ico:'🐟', color:'#44ffaa',
+    sst:[75,85], depth:'100-400ft', chl:'high',
+    tip:'Same as Mahi-Mahi. Floating grass mats, color breaks, current edges.' },
+  { id:'tripletail',    label:'Tripletail',    ico:'🔺', color:'#884400',
+    sst:[72,84], depth:'30-150ft', chl:'moderate',
+    tip:'Floating debris, crab trap buoys, channel markers nearshore.' },
+];
+
+let selectedSpecies = new Set(['blue_marlin','sailfish','mahi','wahoo']); // defaults
+
+function initSpeciesUI(){
+  const grid = document.getElementById('sp-grid');
+  if(!grid) return;
+  grid.innerHTML = SPECIES.map(s => `
+    <button class="sp-btn ${selectedSpecies.has(s.id)?'on':''}" id="sp-${s.id}"
+      onclick="toggleSpecies('${s.id}')"
+      title="${s.tip}">
+      <span class="sp-ico">${s.ico}</span>
+      <span>${s.label}</span>
+    </button>`).join('');
+}
+
+function toggleSpecies(id){
+  if(selectedSpecies.has(id)) selectedSpecies.delete(id);
+  else selectedSpecies.add(id);
+  const btn = document.getElementById('sp-'+id);
+  if(btn) btn.classList.toggle('on', selectedSpecies.has(id));
+  updateAnalyzeBtn();
+}
+function selectAllSpecies(){
+  SPECIES.forEach(s=>selectedSpecies.add(s.id));
+  SPECIES.forEach(s=>{ const b=document.getElementById('sp-'+s.id); if(b) b.classList.add('on'); });
+  updateAnalyzeBtn();
+}
+function clearAllSpecies(){
+  selectedSpecies.clear();
+  SPECIES.forEach(s=>{ const b=document.getElementById('sp-'+s.id); if(b) b.classList.remove('on'); });
+  updateAnalyzeBtn();
+}
+function selectBillfish(){
+  clearAllSpecies();
+  ['blue_marlin','white_marlin','sailfish','swordfish'].forEach(id=>{
+    selectedSpecies.add(id);
+    const b=document.getElementById('sp-'+id); if(b) b.classList.add('on');
+  });
+  updateAnalyzeBtn();
+}
+function selectPelagic(){
+  clearAllSpecies();
+  ['mahi','wahoo','yellowfin','blackfin','kingfish'].forEach(id=>{
+    selectedSpecies.add(id);
+    const b=document.getElementById('sp-'+id); if(b) b.classList.add('on');
+  });
+  updateAnalyzeBtn();
+}
+function updateAnalyzeBtn(){
+  const btn = document.getElementById('abtn');
+  if(!btn) return;
+  const n = selectedSpecies.size;
+  if(n===0) btn.textContent='🎯 SELECT A SPECIES';
+  else if(n===1) btn.textContent=`🎯 ANALYZE — ${SPECIES.find(s=>selectedSpecies.has(s.id))?.label||''}`;
+  else btn.textContent=`🎯 ANALYZE ${n} SPECIES`;
+}
+
+// ═══════════════════════════════════════════
 // AI ANALYSIS
 // ═══════════════════════════════════════════
 async function runAnalysis(){
@@ -1958,6 +2079,12 @@ async function runAnalysis(){
     btn.disabled=false;btn.textContent='🎯 ANALYZE WITH AI';return;
   }
 
+  // Guard: need at least one species
+  if(selectedSpecies.size===0){
+    document.getElementById('aibody').innerHTML=`<div class="aimt"><div class="aimt-ico">🎣</div><div class="aimt-txt">Select at least one target species above, then hit Analyze.</div></div>`;
+    btn.disabled=false; btn.textContent='🎯 SELECT A SPECIES'; return;
+  }
+
   const DIRS=['N','NNE','NE','ENE','E','ESE','SE','SSE','S','SSW','SW','WSW','W','WNW','NW','NNW'];
   let curSummary='No live current data.',avgSpd='0',domDir='NNE';
   if(currentGrid.length>0){
@@ -1977,11 +2104,18 @@ async function runAnalysis(){
     ?'EDDIES: '+detectedEddies.map(e=>`${e.sense} eddy @${e.lat.toFixed(3)}N/${Math.abs(e.lng).toFixed(3)}W ~${(e.radius_deg*69).toFixed(0)}mi ${e.sense==='CCW'?'cyclonic/upwelling':'anticyclonic/warm-core'}`).join('; ')
     :'No significant eddies detected.';
 
-  const satContext=`NASA GIBS satellite imagery (${selectedDate}): Chlorophyll (VIIRS SNPP 1km daily) and SST (MODIS Aqua 4km 8-day) overlays active. Real satellite data showing current ocean color and temperature patterns.`;
+  const satContext=`NASA/CoastWatch satellite imagery (${selectedDate}): Chlorophyll source: ${CHL_SOURCES[activeChlSrc]?.label||'NOAA-20'} (${CHL_SOURCES[activeChlSrc]?.res||'1km'}). MUR SST daily gap-filled. Real satellite data showing current ocean color and temperature patterns.`;
+
+  // Build species-specific context
+  const selSp = SPECIES.filter(s=>selectedSpecies.has(s.id));
+  const spNames = selSp.map(s=>s.label).join(', ');
+  const spContext = selSp.map(s=>
+    `${s.label}: SST pref ${s.sst[0]}–${s.sst[1]}°F, depth ${s.depth}, chl ${s.chl}. ${s.tip}`
+  ).join('\n');
 
   const month=['January','February','March','April','May','June','July','August','September','October','November','December'][new Date().getMonth()];
 
-  const prompt=`You are an expert offshore fishing guide for the Treasure Coast of Florida (Port St. Lucie). Analyze this REAL oceanographic data.
+  const prompt=`You are an expert offshore fishing guide for the Treasure Coast of Florida (Port St. Lucie). Analyze this REAL oceanographic data. TARGET SPECIES: ${spNames}.
 
 SATELLITE DATA (${selectedDate}):
 ${satContext}
@@ -1995,10 +2129,14 @@ DEPTH STRUCTURE (from St. Lucie Inlet 27.17N, 80.18W):
 30ft@3mi, 60ft@5mi, 100ft@8mi, 200ft@13mi, 600ft@22mi, 1000ft@35mi offshore.
 Month: ${month}.
 
+TARGET SPECIES PROFILES:
+${spContext}
+
+For EACH hotspot, specify which target species is most likely there and WHY based on the oceanographic conditions. If multiple species are targeted, give each the hotspot most suited to it. Be species-specific — a wahoo spot differs from a sailfish spot even at similar locations.
 Identify 3-4 specific fishing hotspots. Use the satellite chlorophyll patterns (green = bait concentration), SST temperature breaks, current edges, eddy features, and depth structure. Be specific about WHY each spot is productive based on the real data above.
 
 Respond ONLY valid JSON:
-{"overall":"2-3 sentence assessment of real satellite conditions","conditions_rating":"Excellent|Good|Fair|Poor","avg_current_kt":"${avgSpd}","dominant_flow":"${domDir}","hotspots":[{"name":"descriptive name","location":"X miles bearing from St Lucie Inlet","lat":27.15,"lng":-79.88,"why":"specific reason citing satellite/current data","species":["Mahi","Wahoo"],"technique":"specific method for these conditions","confidence":"High|Medium|Low"}],"pro_tip":"one specific actionable tip for today"}`;
+{"overall":"2-3 sentence assessment focused on conditions for ${spNames}","conditions_rating":"Excellent|Good|Fair|Poor","avg_current_kt":"${avgSpd}","dominant_flow":"${domDir}","hotspots":[{"name":"descriptive name","location":"X miles bearing from St Lucie Inlet","lat":27.15,"lng":-79.88,"why":"specific reason citing satellite/current data AND why this suits the target species","species":["Blue Marlin"],"primary_species":"Blue Marlin","technique":"specific method for this species in these conditions","confidence":"High|Medium|Low","depth_target":"1000ft+"}],"pro_tip":"one species-specific actionable tip for ${spNames} today"}`;
 
   try{
     const res=await fetch('https://api.anthropic.com/v1/messages',{
@@ -2042,9 +2180,15 @@ function renderResults(data){
     const c=PC[i]||'#00d4b8';
     const cc={High:'#5dffaa',Medium:'#f5a623',Low:'#ff4e2a'}[hs.confidence]||'#00d4b8';
     if(hs.lat&&hs.lng){hotspots[i]={...hs};if(i===0)panTo(hs.lat,hs.lng);}
-    html+=`<div class="hs" style="border-left-color:${c}" onclick="panTo(${hs.lat},${hs.lng})">
-      <div style="display:flex;justify-content:space-between"><div class="hsn" style="color:${c}">${i+1}. ${hs.name}</div><div class="conf" style="color:${cc}">${hs.confidence}</div></div>
-      <div class="hsl">📍 ${hs.location}<br>${hs.lat?.toFixed(4)}°N  ${Math.abs(hs.lng||0).toFixed(4)}°W</div>
+    const primarySp = SPECIES.find(s=>s.label===hs.primary_species);
+    const spColor = primarySp?.color || c;
+    html+=`<div class="hs" style="border-left-color:${spColor}" onclick="panTo(${hs.lat},${hs.lng})">
+      <div style="display:flex;justify-content:space-between;align-items:flex-start">
+        <div class="hsn" style="color:${spColor}">${i+1}. ${hs.name}</div>
+        <div class="conf" style="color:${cc}">${hs.confidence}</div>
+      </div>
+      ${hs.primary_species?`<div style="font-family:'Bebas Neue';font-size:12px;color:${spColor};letter-spacing:1px;margin-bottom:3px">${primarySp?.ico||'🎣'} ${hs.primary_species}</div>`:''}
+      <div class="hsl">📍 ${hs.location} ${hs.depth_target?`· ${hs.depth_target}`:''}<br>${hs.lat?.toFixed(4)}°N  ${Math.abs(hs.lng||0).toFixed(4)}°W</div>
       <div class="hsw">${hs.why}</div>
       <div class="hst">🎣 ${hs.technique}</div>
       <div class="tags">${(hs.species||[]).map(s=>`<span class="tag">${s}</span>`).join('')}</div>
@@ -2060,6 +2204,8 @@ function renderResults(data){
 // INIT
 // ═══════════════════════════════════════════
 window.addEventListener('load',()=>{
+  initSpeciesUI();
+  updateAnalyzeBtn();
   setTimeout(()=>{
     fetchCurrentData();
     loadAllSatellite();
