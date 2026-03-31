@@ -29,7 +29,7 @@ html,body{height:100%;overflow:hidden;background:#000;color:var(--text);font-fam
 #app{display:flex;height:100vh;padding-top:50px;}
 
 /* SIDEBAR */
-#sidebar{width:230px;flex-shrink:0;background:var(--panel2);border-right:1px solid var(--border);display:flex;flex-direction:column;overflow-y:auto;backdrop-filter:blur(10px);}
+#sidebar{width:230px;flex-shrink:0;background:var(--panel2);border-right:1px solid var(--border);display:flex;flex-direction:column;overflow-y:auto;backdrop-filter:none;}
 .sb-sec{padding:11px 13px;border-bottom:1px solid var(--border);}
 .sb-ttl{font-family:'Bebas Neue';font-size:12px;letter-spacing:2px;color:var(--teal);margin-bottom:9px;display:flex;align-items:center;gap:5px;}
 .sb-ttl::before{content:'';width:3px;height:13px;background:var(--teal);border-radius:2px;flex-shrink:0;}
@@ -83,10 +83,10 @@ html,body{height:100%;overflow:hidden;background:#000;color:var(--text);font-fam
 #mapCanvas{position:absolute;top:0;left:0;width:100%;height:100%;}
 
 #zoom-ctrls{position:absolute;top:14px;right:14px;z-index:10;display:flex;flex-direction:column;gap:2px;}
-.zctr{width:28px;height:28px;background:var(--panel2);border:1px solid var(--border);color:var(--teal);font-size:16px;cursor:pointer;display:flex;align-items:center;justify-content:center;border-radius:4px;transition:all .2s;backdrop-filter:blur(8px);}
+.zctr{width:28px;height:28px;background:var(--panel2);border:1px solid var(--border);color:var(--teal);font-size:16px;cursor:pointer;display:flex;align-items:center;justify-content:center;border-radius:4px;transition:all .2s;backdrop-filter:none;}
 .zctr:hover{background:var(--border);}
 
-#mbadge{position:absolute;bottom:14px;left:14px;z-index:10;background:var(--panel2);border:1px solid var(--border);border-radius:6px;padding:7px 11px;font-family:'Space Mono';font-size:9px;color:var(--muted);backdrop-filter:blur(8px);}
+#mbadge{position:absolute;bottom:14px;left:14px;z-index:10;background:var(--panel2);border:1px solid var(--border);border-radius:6px;padding:7px 11px;font-family:'Space Mono';font-size:9px;color:var(--muted);backdrop-filter:none;}
 #mbadge strong{color:var(--teal);display:block;margin-bottom:1px;}
 #mcoords{font-size:8px;margin-top:2px;}
 
@@ -95,7 +95,7 @@ html,body{height:100%;overflow:hidden;background:#000;color:var(--text);font-fam
 #abtn:disabled{opacity:.4;cursor:not-allowed;transform:none;}
 
 /* Date picker */
-#date-bar{position:absolute;top:10px;left:50%;transform:translateX(-50%);z-index:10;background:var(--panel2);border:1px solid var(--border);border-radius:6px;padding:5px 12px;display:flex;align-items:center;gap:10px;backdrop-filter:blur(8px);}
+#date-bar{position:absolute;top:10px;left:50%;transform:translateX(-50%);z-index:10;background:var(--panel2);border:1px solid var(--border);border-radius:6px;padding:5px 12px;display:flex;align-items:center;gap:10px;backdrop-filter:none;}
 #date-bar label{font-family:'Space Mono';font-size:9px;color:var(--muted);}
 #date-input{background:transparent;border:none;color:var(--teal);font-family:'Space Mono';font-size:10px;cursor:pointer;outline:none;}
 #date-input::-webkit-calendar-picker-indicator{filter:invert(0.5);}
@@ -103,7 +103,7 @@ html,body{height:100%;overflow:hidden;background:#000;color:var(--text);font-fam
 .date-nav:hover{border-color:var(--teal);color:var(--teal);}
 
 /* AI PANEL */
-#aipanel{width:310px;flex-shrink:0;background:var(--panel2);border-left:1px solid var(--border);display:flex;flex-direction:column;backdrop-filter:blur(10px);}
+#aipanel{width:310px;flex-shrink:0;background:var(--panel2);border-left:1px solid var(--border);display:flex;flex-direction:column;backdrop-filter:none;}
 #aihdr{padding:13px 15px;border-bottom:1px solid var(--border);display:flex;align-items:center;gap:9px;flex-shrink:0;}
 .aiico{font-size:20px;}
 .aittl{font-family:'Bebas Neue';font-size:19px;letter-spacing:2px;color:var(--teal);}
@@ -150,7 +150,7 @@ html,body{height:100%;overflow:hidden;background:#000;color:var(--text);font-fam
 .lgnd-ends{display:flex;justify-content:space-between;font-size:8px;color:var(--muted);font-family:'Space Mono';}
 
 /* Key modal */
-#key-modal{display:none;position:fixed;inset:0;z-index:9999;background:#000c;backdrop-filter:blur(8px);align-items:center;justify-content:center;}
+#key-modal{display:none;position:fixed;inset:0;z-index:9999;background:#000c;backdrop-filter:none;align-items:center;justify-content:center;}
 .km-box{background:var(--panel);border:1px solid var(--border);border-radius:10px;padding:28px;width:400px;max-width:90vw;}
 .km-logo{font-family:'Bebas Neue';font-size:22px;letter-spacing:3px;color:var(--teal);margin-bottom:3px;}
 .km-logo em{color:var(--warm);font-style:normal;}
@@ -391,9 +391,7 @@ html,body{height:100%;overflow:hidden;background:#000;color:var(--text);font-fam
       <span style="font-family:'Space Mono';font-size:8px;color:var(--muted)" id="date-status">—</span>
     </div>
 
-    <!-- REGION SELECTOR -->
-    <div id="region-bar" style="position:absolute;bottom:55px;left:50%;transform:translateX(-50%);z-index:10;display:flex;gap:4px;flex-wrap:wrap;justify-content:center;max-width:90vw;backdrop-filter:blur(8px)">
-    </div>
+
 
     <div id="zoom-ctrls">
       <div class="zctr" onclick="zoom(1.3)">+</div>
@@ -506,17 +504,7 @@ let noaaChartOn = false; // off by default — user toggles on
 let noaaChartCache = {img:null, key:''};
 
 
-const REGIONS = [
-  {"id":"keys",       "name":"Florida Keys",      "lat":24.8,  "lng":-81.2, "scale":2.8, "emoji":"🏝️"},
-  {"id":"miami",      "name":"Miami / Palm Beach", "lat":26.0,  "lng":-79.8, "scale":3.0, "emoji":"🌴"},
-  {"id":"psl",        "name":"Port St Lucie",      "lat":27.2,  "lng":-79.9, "scale":3.2, "emoji":"⭐"},
-  {"id":"cape",       "name":"Cape Canaveral",     "lat":28.5,  "lng":-80.3, "scale":3.0, "emoji":"🚀"},
-  {"id":"jax",        "name":"Jacksonville",       "lat":30.3,  "lng":-80.8, "scale":2.8, "emoji":"🌊"},
-  {"id":"savannah",   "name":"Savannah / SC",      "lat":32.0,  "lng":-79.5, "scale":2.6, "emoji":"🦅"},
-  {"id":"hatteras",   "name":"Cape Hatteras",      "lat":35.5,  "lng":-75.5, "scale":2.8, "emoji":"🌀"},
-  {"id":"chesapeake", "name":"Chesapeake Bay",     "lat":37.0,  "lng":-75.5, "scale":2.8, "emoji":"🦀"},
-  {"id":"nj",         "name":"NJ / NY",            "lat":39.5,  "lng":-73.5, "scale":2.6, "emoji":"🗽"}
-];
+
 const scales = {
   chlOpacity: 0.85,
   sstOpacity: 0.70,
@@ -646,44 +634,7 @@ function toggleNOAAChart(){
 // ═══════════════════════════════════════════
 // REGION SELECTOR
 // ═══════════════════════════════════════════
-let activeRegion = 'psl';
 
-function initRegions(){
-  const bar = document.getElementById('region-bar');
-  if(!bar) return;
-  bar.innerHTML = REGIONS.map(r=>`
-    <button id="rbtn-${r.id}" onclick="goToRegion('${r.id}')"
-      style="padding:5px 10px;border-radius:5px;border:1px solid var(--border);
-        background:${r.id===activeRegion?'var(--teal)':'var(--panel2)'};
-        color:${r.id===activeRegion?'var(--deep)':'var(--muted)'};
-        font-family:'Space Mono';font-size:9px;cursor:pointer;
-        backdrop-filter:blur(8px);white-space:nowrap;transition:all .2s">
-      ${r.emoji} ${r.name}
-    </button>`).join('');
-}
-
-function goToRegion(id){
-  const r = REGIONS.find(x=>x.id===id);
-  if(!r) return;
-  activeRegion = id;
-  vp.lat = r.lat;
-  vp.lng = r.lng;
-  vp.scale = r.scale;
-  // Update button styles
-  REGIONS.forEach(x=>{
-    const btn = document.getElementById('rbtn-'+x.id);
-    if(!btn) return;
-    btn.style.background = x.id===id ? 'var(--teal)' : 'var(--panel2)';
-    btn.style.color = x.id===id ? 'var(--deep)' : 'var(--muted)';
-  });
-  // Invalidate all caches for new viewport
-  bgCacheKey=''; contourCacheKey='';
-  Object.keys(satCache).forEach(k=>{satCache[k].key='';satCache[k].img=null;});
-  noaaChartCache={img:null,key:''};
-  satCtx.clearRect(0,0,satCvs.width,satCvs.height);
-  clearTimeout(loop._satTimer);
-  loop._satTimer=setTimeout(loadAllSatellite,300);
-}
 
 // ═══════════════════════════════════════════
 // KEY MANAGEMENT
@@ -1921,7 +1872,7 @@ function draw(){
 // ANIMATION LOOP (30fps cap)
 // ═══════════════════════════════════════════
 function loop(ts){
-  if(ts-lastFrameTime>50){
+  if(ts-lastFrameTime>66){
     lastFrameTime=ts;animT+=0.008; // slower animation = less GPU
     draw();
     // Redraw satellite if viewport changed
@@ -1930,18 +1881,16 @@ function loop(ts){
     if(vKey!==loop._lastVKey){
       loop._lastVKey=vKey;
       bgCacheKey='';contourCacheKey='';
-      // Clear ALL sat cache images so old tiles don't paint at wrong position
-      Object.keys(satCache).forEach(k=>{satCache[k].key='';satCache[k].img=null;});
-      // Clear satellite canvas immediately — better blank than misaligned
-      satCtx.clearRect(0,0,satCvs.width,satCvs.height);
-      // Invalidate MLD, FSLE, and NOAA chart caches
-      fsleCacheCanvas=null;
-      noaaChartCache={img:null,key:''};
-      // Re-run eddy detection for new viewport
-      if(currentGrid.length>=6) detectEddies();
-      // Debounce: only start loading after panning settles (300ms)
+      // Debounce sat reload — only after pan/zoom settles
       clearTimeout(loop._satTimer);
-      loop._satTimer=setTimeout(loadAllSatellite, 300);
+      loop._satTimer=setTimeout(()=>{
+        Object.keys(satCache).forEach(k=>{satCache[k].key='';satCache[k].img=null;});
+        satCtx.clearRect(0,0,satCvs.width,satCvs.height);
+        fsleCacheCanvas=null;
+        noaaChartCache={img:null,key:''};
+        if(currentGrid.length>=6) detectEddies();
+        loadAllSatellite();
+      }, 500);
     }
     // Auto-refetch currents when zoom tier changes (coarse→micro)
     const newTier = getGridSpacing();
@@ -2108,15 +2057,10 @@ async function fetchAllData(){
 // ═══════════════════════════════════════════
 function zoom(f){vp.scale=Math.max(0.3,Math.min(20,vp.scale*f));}
 
-function clampViewport(){
-  // Soft clamp — just prevent going wildly off the map
-  vp.lat = Math.max(15, Math.min(50, vp.lat));
-  vp.lng = Math.max(-100, Math.min(-55, vp.lng));
-}
+
 cvs.addEventListener('wheel',e=>{
   e.preventDefault();
   zoom(e.deltaY<0?1.15:0.87);
-  clampViewport();
 },{passive:false});
 cvs.addEventListener('mousedown',e=>{drag={x:e.clientX,y:e.clientY,lat:vp.lat,lng:vp.lng};});
 cvs.addEventListener('mousemove',e=>{
@@ -2343,7 +2287,6 @@ function renderResults(data){
 // ═══════════════════════════════════════════
 window.addEventListener('load',()=>{
   initSpeciesGrid();
-  initRegions();
   setTimeout(()=>{
     fetchCurrentData();
     loadAllSatellite();
