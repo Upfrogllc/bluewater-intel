@@ -491,8 +491,8 @@ const satCtx = satCvs.getContext('2d');
 const cvs    = document.getElementById('mapCanvas');
 const ctx    = cvs.getContext('2d');
 
-let vp = {lat:27.2, lng:-79.9, scale:3.2}; // Default: Port St Lucie
-const BASE_DLAT=4.5, BASE_DLNG=6.5;   // Regional view — tighter, faster
+let vp = {lat:30.0, lng:-78.5, scale:1.4};  // Default: mid east coast, zoomed to see FL to NC
+const BASE_DLAT=9.0, BASE_DLNG=13.5;  // Full east coast coverage
 let animT=0, drag=null, lastFrameTime=0;
 let currentGrid=[], dataFetchTime=null, hotspots=[], detectedEddies=[];
 let bgCache=null, bgCacheKey='', contourCache=null, contourCacheKey='';
@@ -1811,9 +1811,9 @@ async function fetchCurrentData(){
   const spacingMi = Math.round(spacing * 69);
   const total = pts.length;
   
-  const zoomLabel = vp.scale>=5.0 ? `MICRO ${spacing}°(~${spacingMi}mi)` :
-                    vp.scale>=3.0 ? `LOCAL ${spacing}°(~${spacingMi}mi)` :
-                    vp.scale>=2.0 ? `REGIONAL ${spacing}°(~${spacingMi}mi)` :
+  const zoomLabel = vp.scale>=3.0 ? `MICRO ${spacing}°(~${spacingMi}mi)` :
+                    vp.scale>=1.5 ? `LOCAL ${spacing}°(~${spacingMi}mi)` :
+                    vp.scale>=0.8 ? `REGIONAL ${spacing}°(~${spacingMi}mi)` :
                                     `COAST ${spacing}°(~${spacingMi}mi)`;
   
   setDS('loading',`${zoomLabel} · ${total} pts`);setFill(0);
@@ -1884,7 +1884,7 @@ async function fetchAllData(){
 // ═══════════════════════════════════════════
 // INTERACTION
 // ═══════════════════════════════════════════
-function zoom(f){vp.scale=Math.max(0.3,Math.min(20,vp.scale*f));}
+function zoom(f){vp.scale=Math.max(0.2,Math.min(20,vp.scale*f));}
 
 
 cvs.addEventListener('wheel',e=>{
@@ -1924,8 +1924,8 @@ function toggleLayer(key){
   layers[key]=!layers[key];
   document.getElementById('tog-'+key).classList.toggle('on',layers[key]);
   document.getElementById('btn-'+key).classList.toggle('active',layers[key]);
-  // Auto-fetch MLD data when toggled on for first time
-
+  // Fetch data when layer first turned on
+  if(key==='cur' && layers.cur && currentGrid.length===0) fetchCurrentData();
 }
 function panTo(lat,lng){vp.lat=lat+0.05;vp.lng=lng+0.25;vp.scale=Math.max(vp.scale,1.5);}
 
