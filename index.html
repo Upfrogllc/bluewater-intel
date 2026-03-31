@@ -149,6 +149,31 @@ html,body{height:100%;overflow:hidden;background:#000;color:var(--text);font-fam
 .lgnd-bar{height:8px;border-radius:3px;margin:4px 0 2px;}
 .lgnd-ends{display:flex;justify-content:space-between;font-size:8px;color:var(--muted);font-family:'Space Mono';}
 
+/* Satellite range sliders */
+.rng-wrap{margin:6px 0 10px;}
+.rng-header{display:flex;justify-content:space-between;align-items:center;margin-bottom:3px;}
+.rng-lbl{font-family:'Space Mono';font-size:8px;color:var(--muted);letter-spacing:1px;}
+.rng-vals{font-family:'Space Mono';font-size:8px;color:var(--teal);}
+.rng-row{display:flex;align-items:center;gap:4px;margin-bottom:2px;}
+.rng-tag{font-size:7px;color:var(--muted);font-family:'Space Mono';width:20px;text-align:right;flex-shrink:0;}
+input[type=range].rng{
+  flex:1;height:3px;border-radius:2px;outline:none;cursor:pointer;
+  -webkit-appearance:none;appearance:none;
+  background:var(--border);
+}
+input[type=range].rng::-webkit-slider-thumb{
+  -webkit-appearance:none;width:10px;height:10px;border-radius:50%;
+  background:var(--teal);cursor:pointer;border:none;
+}
+input[type=range].rng::-moz-range-thumb{
+  width:10px;height:10px;border-radius:50%;
+  background:var(--teal);cursor:pointer;border:none;
+}
+input[type=range].rng.sst-rng::-webkit-slider-thumb{background:var(--hot);}
+input[type=range].rng.sst-rng::-moz-range-thumb{background:var(--hot);}
+.rng-reset{font-family:'Space Mono';font-size:7px;color:var(--muted);background:transparent;border:none;cursor:pointer;padding:0;text-decoration:underline;}
+.rng-reset:hover{color:var(--teal);}
+
 /* Key modal */
 #key-modal{display:none;position:fixed;inset:0;z-index:9999;background:#000c;backdrop-filter:blur(8px);align-items:center;justify-content:center;}
 .km-box{background:var(--panel);border:1px solid var(--border);border-radius:10px;padding:28px;width:400px;max-width:90vw;}
@@ -300,14 +325,67 @@ html,body{height:100%;overflow:hidden;background:#000;color:var(--text);font-fam
     </div>
 
     <div class="sb-sec">
-      <div class="sb-ttl">Legend</div>
-      <div style="font-family:'Space Mono';font-size:8px;color:var(--muted);margin-bottom:4px">Chlorophyll (mg/m³)</div>
-      <div class="lgnd-bar" style="background:linear-gradient(to right,#020c16,#003366,#0066aa,#00aa44,#aadd00,#ffaa00,#ff4400)"></div>
-      <div class="lgnd-ends"><span>&lt;0.01</span><span>0.1</span><span>1</span><span>10+</span></div>
-      <div style="font-family:'Space Mono';font-size:8px;color:var(--muted);margin:8px 0 4px">SST (°F)</div>
-      <div class="lgnd-bar" style="background:linear-gradient(to right,#4ac8ff,#00d4b8,#f5a623,#ff4e2a)"></div>
-      <div class="lgnd-ends"><span>72°</span><span>78°</span><span>84°</span><span>88°</span></div>
-      <div style="font-family:'Space Mono';font-size:8px;color:var(--muted);margin:8px 0 4px">Depth</div>
+      <div class="sb-ttl">Satellite Range &amp; Contrast</div>
+
+      <!-- CHL sliders -->
+      <div class="rng-wrap">
+        <div class="rng-header">
+          <span class="rng-lbl">CHLOROPHYLL (mg/m³)</span>
+          <button class="rng-reset" onclick="resetChl()">reset</button>
+        </div>
+        <div id="chl-grad" class="lgnd-bar" style="background:linear-gradient(to right,#020c16,#003366,#0066aa,#00aa44,#aadd00,#ffaa00,#ff4400)"></div>
+        <div class="rng-row">
+          <span class="rng-tag">min</span>
+          <input type="range" class="rng" id="chl-min" min="-3" max="1" step="0.1" value="-2" oninput="onChlChange()">
+          <span class="rng-vals" id="chl-min-lbl">0.01</span>
+        </div>
+        <div class="rng-row">
+          <span class="rng-tag">max</span>
+          <input type="range" class="rng" id="chl-max" min="-1" max="2" step="0.1" value="1" oninput="onChlChange()">
+          <span class="rng-vals" id="chl-max-lbl">10</span>
+        </div>
+        <div class="rng-row">
+          <span class="rng-tag">γ</span>
+          <input type="range" class="rng" id="chl-gamma" min="0.3" max="3" step="0.05" value="1" oninput="onChlChange()">
+          <span class="rng-vals" id="chl-gamma-lbl">1.0×</span>
+        </div>
+        <div class="rng-row">
+          <span class="rng-tag">α</span>
+          <input type="range" class="rng" id="chl-alpha" min="0.2" max="1" step="0.05" value="0.85" oninput="onChlChange()">
+          <span class="rng-vals" id="chl-alpha-lbl">85%</span>
+        </div>
+      </div>
+
+      <!-- SST sliders -->
+      <div class="rng-wrap">
+        <div class="rng-header">
+          <span class="rng-lbl">SST (°F)</span>
+          <button class="rng-reset" onclick="resetSst()">reset</button>
+        </div>
+        <div id="sst-grad" class="lgnd-bar" style="background:linear-gradient(to right,#4ac8ff,#00d4b8,#f5a623,#ff4e2a)"></div>
+        <div class="rng-row">
+          <span class="rng-tag">min</span>
+          <input type="range" class="rng sst-rng" id="sst-min" min="60" max="82" step="0.5" value="72" oninput="onSstChange()">
+          <span class="rng-vals" id="sst-min-lbl">72°F</span>
+        </div>
+        <div class="rng-row">
+          <span class="rng-tag">max</span>
+          <input type="range" class="rng sst-rng" id="sst-max" min="78" max="100" step="0.5" value="88" oninput="onSstChange()">
+          <span class="rng-vals" id="sst-max-lbl">88°F</span>
+        </div>
+        <div class="rng-row">
+          <span class="rng-tag">γ</span>
+          <input type="range" class="rng sst-rng" id="sst-gamma" min="0.3" max="3" step="0.05" value="1" oninput="onSstChange()">
+          <span class="rng-vals" id="sst-gamma-lbl">1.0×</span>
+        </div>
+        <div class="rng-row">
+          <span class="rng-tag">α</span>
+          <input type="range" class="rng sst-rng" id="sst-alpha" min="0.2" max="1" step="0.05" value="0.80" oninput="onSstChange()">
+          <span class="rng-vals" id="sst-alpha-lbl">80%</span>
+        </div>
+      </div>
+
+      <div style="font-family:'Space Mono';font-size:8px;color:var(--muted);margin:6px 0 4px">DEPTH CONTOURS</div>
       <div class="lgnd-bar" style="background:linear-gradient(to right,#a0c8f0,#3070b8,#0c3080,#050e1e)"></div>
       <div class="lgnd-ends"><span>10ft</span><span>100ft</span><span>500ft</span><span>2000ft</span></div>
     </div>
@@ -444,6 +522,52 @@ function closeKeyModal(){document.getElementById('key-modal').style.display='non
 function saveKey(){const v=document.getElementById('key-input').value.trim();if(!v.startsWith('sk-ant-'))return;localStorage.setItem('bwi_key',v);closeKeyModal();updateKeyIndicator();}
 document.addEventListener('keydown',e=>{if(e.key==='Escape')closeKeyModal();if(e.key==='Enter'&&document.getElementById('key-modal').style.display==='flex')saveKey();});
 updateKeyIndicator();
+
+// ═══════════════════════════════════════════
+// SATELLITE CONTRAST / RANGE STATE
+// ═══════════════════════════════════════════
+const satRanges = {
+  chl: { minLog:-2, maxLog:1, gamma:1, alpha:0.85 },
+  sst: { minF:72, maxF:88, gamma:1, alpha:0.80 }
+};
+
+function onChlChange(){
+  satRanges.chl.minLog = parseFloat(document.getElementById('chl-min').value);
+  satRanges.chl.maxLog = parseFloat(document.getElementById('chl-max').value);
+  satRanges.chl.gamma  = parseFloat(document.getElementById('chl-gamma').value);
+  satRanges.chl.alpha  = parseFloat(document.getElementById('chl-alpha').value);
+  document.getElementById('chl-min-lbl').textContent  = Math.pow(10,satRanges.chl.minLog).toFixed(2);
+  document.getElementById('chl-max-lbl').textContent  = Math.pow(10,satRanges.chl.maxLog).toFixed(1);
+  document.getElementById('chl-gamma-lbl').textContent= satRanges.chl.gamma.toFixed(2)+'×';
+  document.getElementById('chl-alpha-lbl').textContent= Math.round(satRanges.chl.alpha*100)+'%';
+  drawSatellite();
+}
+function resetChl(){
+  document.getElementById('chl-min').value  ='-2';
+  document.getElementById('chl-max').value  ='1';
+  document.getElementById('chl-gamma').value='1';
+  document.getElementById('chl-alpha').value='0.85';
+  onChlChange();
+}
+
+function onSstChange(){
+  satRanges.sst.minF  = parseFloat(document.getElementById('sst-min').value);
+  satRanges.sst.maxF  = parseFloat(document.getElementById('sst-max').value);
+  satRanges.sst.gamma = parseFloat(document.getElementById('sst-gamma').value);
+  satRanges.sst.alpha = parseFloat(document.getElementById('sst-alpha').value);
+  document.getElementById('sst-min-lbl').textContent  = satRanges.sst.minF.toFixed(1)+'°F';
+  document.getElementById('sst-max-lbl').textContent  = satRanges.sst.maxF.toFixed(1)+'°F';
+  document.getElementById('sst-gamma-lbl').textContent= satRanges.sst.gamma.toFixed(2)+'×';
+  document.getElementById('sst-alpha-lbl').textContent= Math.round(satRanges.sst.alpha*100)+'%';
+  drawSatellite();
+}
+function resetSst(){
+  document.getElementById('sst-min').value  ='72';
+  document.getElementById('sst-max').value  ='88';
+  document.getElementById('sst-gamma').value='1';
+  document.getElementById('sst-alpha').value='0.80';
+  onSstChange();
+}
 
 // ═══════════════════════════════════════════
 // GEO HELPERS
@@ -601,9 +725,40 @@ function toggleNoaaChart(){
   }
 }
 
+// Apply gamma + range remapping to a canvas image
+// gamma < 1 = compress highlights / boost darks; gamma > 1 = stretch highlights
+function applyImageFilter(srcImg, W, H, gamma, alpha){
+  // Draw source to temp canvas
+  const tmp = document.createElement('canvas'); tmp.width=W; tmp.height=H;
+  const tc  = tmp.getContext('2d');
+  tc.drawImage(srcImg, 0, 0, W, H);
+  if(gamma === 1.0) {
+    // No per-pixel work needed — just draw with alpha
+    satCtx.globalAlpha = alpha;
+    satCtx.drawImage(tmp, 0, 0);
+    return;
+  }
+  // Apply gamma per-pixel
+  const id = tc.getImageData(0,0,W,H);
+  const d  = id.data;
+  // Build gamma LUT for speed
+  const lut = new Uint8Array(256);
+  for(let i=0;i<256;i++) lut[i] = Math.round(Math.pow(i/255, 1/gamma)*255);
+  for(let i=0;i<d.length;i+=4){
+    if(d[i+3]<4) continue; // skip transparent
+    d[i]   = lut[d[i]];
+    d[i+1] = lut[d[i+1]];
+    d[i+2] = lut[d[i+2]];
+  }
+  tc.putImageData(id,0,0);
+  satCtx.globalAlpha = alpha;
+  satCtx.drawImage(tmp, 0, 0);
+}
+
 function drawSatellite(){
   const W=satCvs.width, H=satCvs.height;
   satCtx.clearRect(0,0,W,H);
+  satCtx.globalCompositeOperation='source-over';
 
   // NOAA Nautical Chart — drawn first as base
   if(noaaChartOn && noaaChartCache.img){
@@ -618,21 +773,20 @@ function drawSatellite(){
     }catch(e){}
   }
 
-  // SST with colorized blend
+  // SST — apply gamma and user alpha
   if(satLayers.sst && satCache.sst.img){
     try{
-      satCtx.globalAlpha=satLayers.tc?0.65:0.80;
-      satCtx.drawImage(satCache.sst.img,0,0,W,H);
+      const baseAlpha = satLayers.tc ? satRanges.sst.alpha*0.8 : satRanges.sst.alpha;
+      applyImageFilter(satCache.sst.img, W, H, satRanges.sst.gamma, baseAlpha);
     }catch(e){}
   }
 
-  // Chlorophyll on top with vivid blend mode
+  // Chlorophyll — screen blend + gamma and user alpha
   if(satLayers.chl && satCache.chl.img){
     try{
-      satCtx.globalCompositeOperation=satLayers.sst||satLayers.tc?'screen':'source-over';
-      satCtx.globalAlpha=satLayers.sst||satLayers.tc?0.7:0.85;
-      satCtx.drawImage(satCache.chl.img,0,0,W,H);
-      satCtx.globalCompositeOperation='source-over';
+      satCtx.globalCompositeOperation = satLayers.sst||satLayers.tc ? 'screen' : 'source-over';
+      applyImageFilter(satCache.chl.img, W, H, satRanges.chl.gamma, satRanges.chl.alpha);
+      satCtx.globalCompositeOperation = 'source-over';
     }catch(e){}
   }
   satCtx.globalAlpha=1.0;
