@@ -1001,29 +1001,98 @@ function toggleNoaaChart(){
 
 // Apply gamma + range remapping to a canvas image
 // gamma < 1 = compress highlights / boost darks; gamma > 1 = stretch highlights
-function applyImageFilter(srcImg, W, H, gamma, alpha){
-  // Draw source to temp canvas
+// ── rgb→hue (0-360) helper ──────────────────────────────────────────
+function rgbToHue(r,g,b){
+  const rn=r/255,gn=g/255,bn=b/255;
+  const mx=Math.max(rn,gn,bn), mn=Math.min(rn,gn,bn), d=mx-mn;
+  if(d<0.01) return -1; // achromatic (grey/white/black) → ignore
+  let h=0;
+  if(mx===rn)      h=((gn-bn)/d+6)%6;
+  else if(mx===gn) h=(bn-rn)/d+2;
+  else             h=(rn-gn)/d+4;
+  return h*60;
+}
+
+// ── pixel position (0-1) within GIBS SST rainbow colormap ───────────
+// GIBS SST colormap: blue(cold)→cyan→green→yellow→red(hot)
+// Hue progression: ~240° (blue) → 180° (cyan) → 120° (green) → 60° (yellow) → 0°/360° (red)
+// That's hue DECREASING from 240 to 0 as temp increases.
+// Full physical range ≈ 0–35°C = 32–95°F
+const SST_HUE_COLD = 240; // hue at coldest (0°C / 32°F)
+const SST_HUE_HOT  = 0;   // hue at hottest (35°C / 95°F)
+const SST_PHYS_MIN_F = 32;
+const SST_PHYS_MAX_F = 95;
+
+function sstHueToF(hue){
+  // hue 240→0 maps to 32→95°F
+  const pos = (SST_HUE_COLD - hue) / (SST_HUE_COLD - SST_HUE_HOT); // 0=cold,1=hot
+  return SST_PHYS_MIN_F + pos * (SST_PHYS_MAX_F - SST_PHYS_MIN_F);
+}
+
+// ── pixel position within GIBS CHL rainbow colormap ────────────────
+// GIBS CHL colormap: purple(low)→blue→cyan→green→yellow→red(high)
+// Hue: ~280°(purple) → 240°(blue) → 180°(cyan) → 120°(green) → 60°(yellow) → 0°(red)
+// Physical range ≈ 0.01–20 mg/m³ (log scale: log10 = -2 to +1.3)
+const CHL_HUE_LOW  = 280;
+const CHL_HUE_HIGH = 0;
+const CHL_PHYS_MIN_LOG = -2.0;
+const CHL_PHYS_MAX_LOG =  1.3;
+
+function chlHueToLog(hue){
+  let h = hue;
+  if(h > CHL_HUE_LOW) h = CHL_HUE_LOW;
+  const pos = (CHL_HUE_LOW - h) / (CHL_HUE_LOW - CHL_HUE_HIGH);
+  return CHL_PHYS_MIN_LOG + pos * (CHL_PHYS_MAX_LOG - CHL_PHYS_MIN_LOG);
+}
+
+// ── Main image filter: gamma + alpha + range masking ───────────────
+function applyImageFilter(srcImg, W, H, gamma, alpha, layerKey){
   const tmp = document.createElement('canvas'); tmp.width=W; tmp.height=H;
   const tc  = tmp.getContext('2d');
   tc.drawImage(srcImg, 0, 0, W, H);
-  if(gamma === 1.0) {
-    // No per-pixel work needed — just draw with alpha
-    satCtx.globalAlpha = alpha;
-    satCtx.drawImage(tmp, 0, 0);
-    return;
-  }
-  // Apply gamma per-pixel
+
   const id = tc.getImageData(0,0,W,H);
   const d  = id.data;
-  // Build gamma LUT for speed
+
+  // Build gamma LUT
   const lut = new Uint8Array(256);
-  for(let i=0;i<256;i++) lut[i] = Math.round(Math.pow(i/255, 1/gamma)*255);
+  const g = (gamma && gamma !== 1.0) ? gamma : 1.0;
+  for(let i=0;i<256;i++) lut[i] = g===1.0 ? i : Math.round(Math.pow(i/255, 1/g)*255);
+
+  // Range bounds from satRanges
+  const doSstMask = layerKey==='sst';
+  const doChlMask = layerKey==='chl';
+  const sstMin = satRanges.sst.minF;
+  const sstMax = satRanges.sst.maxF;
+  const chlMin = satRanges.chl.minLog;
+  const chlMax = satRanges.chl.maxLog;
+
   for(let i=0;i<d.length;i+=4){
-    if(d[i+3]<4) continue; // skip transparent
-    d[i]   = lut[d[i]];
-    d[i+1] = lut[d[i+1]];
-    d[i+2] = lut[d[i+2]];
+    if(d[i+3]<4) continue;
+
+    // Range masking
+    if(doSstMask || doChlMask){
+      const hue = rgbToHue(d[i],d[i+1],d[i+2]);
+      if(hue >= 0){ // skip achromatic pixels (land, missing data)
+        if(doSstMask){
+          const tempF = sstHueToF(hue);
+          if(tempF < sstMin || tempF > sstMax){ d[i+3]=0; continue; }
+        }
+        if(doChlMask){
+          const logVal = chlHueToLog(hue);
+          if(logVal < chlMin || logVal > chlMax){ d[i+3]=0; continue; }
+        }
+      }
+    }
+
+    // Gamma
+    if(g !== 1.0){
+      d[i]   = lut[d[i]];
+      d[i+1] = lut[d[i+1]];
+      d[i+2] = lut[d[i+2]];
+    }
   }
+
   tc.putImageData(id,0,0);
   satCtx.globalAlpha = alpha;
   satCtx.drawImage(tmp, 0, 0);
@@ -1046,7 +1115,7 @@ function drawSatellite(){
   if(satLayers.sst && satCache.sst.img){
     try{
       const baseAlpha = satLayers.tc ? satRanges.sst.alpha*0.8 : satRanges.sst.alpha;
-      applyImageFilter(satCache.sst.img, W, H, satRanges.sst.gamma, baseAlpha);
+      applyImageFilter(satCache.sst.img, W, H, satRanges.sst.gamma, baseAlpha, 'sst');
     }catch(e){}
   }
 
@@ -1054,7 +1123,7 @@ function drawSatellite(){
   if(satLayers.chl && satCache.chl.img){
     try{
       satCtx.globalCompositeOperation = satLayers.sst||satLayers.tc ? 'screen' : 'source-over';
-      applyImageFilter(satCache.chl.img, W, H, satRanges.chl.gamma, satRanges.chl.alpha);
+      applyImageFilter(satCache.chl.img, W, H, satRanges.chl.gamma, satRanges.chl.alpha, 'chl');
       satCtx.globalCompositeOperation = 'source-over';
     }catch(e){}
   }
