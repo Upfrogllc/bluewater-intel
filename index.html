@@ -783,51 +783,65 @@ async function loadAllSatellite(){
 // ── HYCOM Mixed Layer Depth (thermocline proxy) ──
 async function fetchMLD(){
   const b = getViewBounds();
-  setSatStatus2('mld','loading','Fetching HYCOM model...');
+  setSatStatus2('mld','loading','Fetching HYCOM MLD...');
 
-  // HYCOM Global 2D via NOAA NCEI ERDDAP
-  // mlt = mixed layer thickness in meters (~thermocline depth)
-  // Lon is 0-360 format, so we add 360 to negative longitudes
-  const west  = (b.west  + 360) % 360;
-  const east  = (b.east  + 360) % 360;
-  const south = Math.max(-79, b.south);
-  const north = Math.min(79,  b.north);
-  
-  // Use stride to limit data points (~0.5° spacing)
-  const stride = Math.max(1, Math.round(0.5 / 0.08)); // HYCOM is ~0.08° resolution
-  
-  // Get most recent time — ERDDAP "last" shorthand
-  const url = `https://www.ncei.noaa.gov/erddap/griddap/Hycom_sfc_2d.json?mlt[(last)][(${south.toFixed(2)}):(${north.toFixed(2)})][(${west.toFixed(2)}):(${east.toFixed(2)})]&stride=${stride},${stride}`;
-  
-  try{
-    const res = await fetch(url);
-    if(!res.ok) throw new Error(`HTTP ${res.status}`);
-    const data = await res.json();
-    
-    // ERDDAP JSON format: {table: {columnNames, rows}}
-    const cols = data.table.columnNames; // ["time","latitude","longitude","mlt"]
-    const rows = data.table.rows;
-    const latIdx = cols.indexOf('latitude');
-    const lngIdx = cols.indexOf('longitude');
-    const mltIdx = cols.indexOf('mlt');
-    
-    mldGrid = rows
-      .filter(r => r[mltIdx] !== null && r[mltIdx] > 0)
-      .map(r => ({
-        lat: r[latIdx],
-        lng: r[lngIdx] > 180 ? r[lngIdx] - 360 : r[lngIdx], // convert 0-360 to -180-180
-        mld_m: r[mltIdx]
-      }));
-    
-    setSatStatus2('mld','live',`${mldGrid.length} pts · HYCOM MLD`);
-    console.log('MLD loaded:', mldGrid.length, 'points, range:', 
-      Math.min(...mldGrid.map(p=>p.mld_m)).toFixed(0)+'m —',
-      Math.max(...mldGrid.map(p=>p.mld_m)).toFixed(0)+'m');
-  } catch(e){
-    setSatStatus2('mld','err',`Failed: ${e.message.slice(0,40)}`);
-    console.warn('HYCOM MLD fetch failed:', e.message);
-    mldGrid = [];
+  // HYCOM Global 3D dataset has mlt (mixed layer thickness)
+  // Lon is 0-360, lat is -80 to 80
+  // stride syntax: [(start):(stride):(stop)] — 6 steps ≈ 0.5° at 0.08° resolution
+  const west  = ((b.west  % 360) + 360) % 360;
+  const east  = ((b.east  % 360) + 360) % 360;
+  const south = Math.max(-79, b.south).toFixed(2);
+  const north = Math.min( 79, b.north).toFixed(2);
+  const stride = 6; // ~0.5° spacing
+
+  // Try multiple ERDDAP endpoints — ncei can be slow/down
+  const endpoints = [
+    `https://www.ncei.noaa.gov/erddap/griddap/Hycom_sfc_3d.json?mlt%5B(last)%5D%5B(0.0)%5D%5B(${south})%3A${stride}%3A(${north})%5D%5B(${west.toFixed(2)})%3A${stride}%3A(${east.toFixed(2)})%5D`,
+  ];
+
+  let lastErr = 'No endpoints succeeded';
+  for(const url of endpoints){
+    try{
+      setSatStatus2('mld','loading','Querying HYCOM ERDDAP...');
+      const res = await fetch(url, {signal: AbortSignal.timeout(20000)});
+      if(!res.ok){
+        const txt = await res.text();
+        lastErr = `HTTP ${res.status}: ${txt.slice(0,100)}`;
+        console.warn('HYCOM endpoint failed:', lastErr);
+        continue;
+      }
+      const data = await res.json();
+      const cols = data.table.columnNames;
+      const rows = data.table.rows;
+      const latIdx = cols.indexOf('latitude');
+      const lngIdx = cols.indexOf('longitude');
+      const mltIdx = cols.indexOf('mlt');
+
+      if(mltIdx < 0){ lastErr='mlt column not found in response'; continue; }
+
+      mldGrid = rows
+        .filter(r => r[mltIdx] !== null && r[mltIdx] > 0 && r[mltIdx] < 5000)
+        .map(r => ({
+          lat: r[latIdx],
+          lng: r[lngIdx] > 180 ? r[lngIdx] - 360 : r[lngIdx],
+          mld_m: r[mltIdx]
+        }));
+
+      if(!mldGrid.length){ lastErr='All MLD values null or invalid'; continue; }
+
+      setSatStatus2('mld','live',`${mldGrid.length}pts · HYCOM MLD`);
+      console.log('MLD:', mldGrid.length,'pts, range',
+        Math.min(...mldGrid.map(p=>p.mld_m)).toFixed(0)+'–'+
+        Math.max(...mldGrid.map(p=>p.mld_m)).toFixed(0)+'m');
+      return;
+    } catch(e){
+      lastErr = e.message;
+      console.warn('HYCOM fetch error:', e.message);
+    }
   }
+
+  setSatStatus2('mld','err',`Failed: ${lastErr.slice(0,50)}`);
+  mldGrid = [];
 }
 
 function setSatStatus2(layer, state, msg){
