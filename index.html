@@ -200,6 +200,37 @@ input[type=range].rng.sst-rng::-moz-range-thumb{background:var(--hot);}
 .km-save:hover{background:var(--bait);}
 .km-skip{padding:11px 14px;border-radius:6px;background:transparent;border:1px solid var(--border);color:var(--muted);font-family:'Space Mono';font-size:9px;cursor:pointer;}
 
+/* ── Map toolbar (info / measure buttons) ── */
+#map-toolbar{position:absolute;top:10px;left:14px;z-index:10;display:flex;flex-direction:column;gap:3px;}
+.tbtn{width:32px;height:32px;background:var(--panel2);border:1px solid var(--border);color:var(--muted);font-size:14px;cursor:pointer;display:flex;align-items:center;justify-content:center;border-radius:4px;transition:all .2s;backdrop-filter:blur(8px);position:relative;}
+.tbtn:hover{background:var(--border);color:var(--text);}
+.tbtn.active{background:var(--teal2);border-color:var(--teal);color:var(--teal);}
+.tbtn .tt{position:absolute;left:38px;top:50%;transform:translateY(-50%);background:var(--panel);border:1px solid var(--border);border-radius:4px;padding:3px 8px;font-family:'Space Mono';font-size:8px;color:var(--text);white-space:nowrap;pointer-events:none;opacity:0;transition:opacity .15s;}
+.tbtn:hover .tt{opacity:1;}
+
+/* ── Spot data popup ── */
+#spot-popup{display:none;position:absolute;z-index:200;background:var(--panel2);border:1px solid var(--teal);border-radius:8px;padding:0;min-width:260px;max-width:300px;backdrop-filter:blur(14px);box-shadow:0 4px 32px #00000066,0 0 20px #00d4b822;pointer-events:all;}
+#spot-popup .sp-hdr{padding:9px 12px 7px;border-bottom:1px solid var(--border);display:flex;align-items:center;justify-content:space-between;}
+#spot-popup .sp-title{font-family:'Bebas Neue';font-size:15px;letter-spacing:2px;color:var(--teal);}
+#spot-popup .sp-close{background:transparent;border:none;color:var(--muted);font-size:16px;cursor:pointer;line-height:1;padding:0 2px;}
+#spot-popup .sp-close:hover{color:var(--text);}
+#spot-popup .sp-body{padding:10px 12px;}
+.sp-row{display:flex;justify-content:space-between;align-items:baseline;margin-bottom:6px;border-bottom:1px solid #ffffff08;padding-bottom:5px;}
+.sp-row:last-child{border-bottom:none;margin-bottom:0;padding-bottom:0;}
+.sp-lbl{font-family:'Space Mono';font-size:7px;color:var(--muted);letter-spacing:1px;flex-shrink:0;}
+.sp-val{font-family:'Space Mono';font-size:9px;color:var(--text);text-align:right;word-break:break-all;}
+.sp-val.hot{color:var(--hot);}
+.sp-val.teal{color:var(--teal);}
+.sp-val.warm{color:var(--warm);}
+.sp-val.bait{color:var(--bait);}
+.sp-section{font-family:'Bebas Neue';font-size:10px;letter-spacing:2px;color:var(--warm);margin:8px 0 5px;padding-top:6px;border-top:1px solid var(--border);}
+.sp-coords-block{background:#ffffff06;border-radius:4px;padding:6px 8px;margin-bottom:6px;}
+.sp-coord-line{font-family:'Space Mono';font-size:8px;color:var(--text);margin-bottom:2px;display:flex;justify-content:space-between;}
+.sp-coord-line span{color:var(--muted);font-size:7px;}
+
+/* ── Measure overlay ── */
+#measure-banner{display:none;position:absolute;top:54px;left:50%;transform:translateX(-50%);z-index:15;background:var(--panel2);border:1px solid var(--warm);border-radius:5px;padding:5px 14px;font-family:'Space Mono';font-size:9px;color:var(--warm);backdrop-filter:blur(8px);pointer-events:none;text-align:center;}
+
 /* Species selector */
 .sp-grid{display:grid;grid-template-columns:1fr 1fr;gap:4px;margin:8px 0 6px;}
 .sp-btn{display:flex;align-items:center;gap:5px;padding:5px 7px;border-radius:5px;border:1px solid var(--border);background:transparent;color:var(--muted);font-family:'Space Mono';font-size:8px;cursor:pointer;transition:all .15s;text-align:left;}
@@ -518,6 +549,28 @@ input[type=range].rng.sst-rng::-moz-range-thumb{background:var(--hot);}
     <div id="zoom-ctrls">
       <div class="zctr" onclick="zoom(1.3)">+</div>
       <div class="zctr" onclick="zoom(0.77)">−</div>
+    </div>
+
+    <!-- Map toolbar -->
+    <div id="map-toolbar">
+      <div class="tbtn" id="tbtn-info" onclick="setMapMode('info')" title="Spot Info">
+        📍<div class="tt">Spot Info — click map</div>
+      </div>
+      <div class="tbtn" id="tbtn-measure" onclick="setMapMode('measure')" title="Measure">
+        📏<div class="tt">Measure Distance</div>
+      </div>
+    </div>
+
+    <!-- Measure banner -->
+    <div id="measure-banner">📏 MEASURE MODE — Click first point</div>
+
+    <!-- Spot data popup -->
+    <div id="spot-popup">
+      <div class="sp-hdr">
+        <div class="sp-title">📍 SPOT DATA</div>
+        <button class="sp-close" onclick="closeSpotPopup()">✕</button>
+      </div>
+      <div class="sp-body" id="spot-popup-body"></div>
     </div>
 
     <div id="mbadge">
@@ -1951,6 +2004,9 @@ function draw(){
     ctx.shadowBlur=0;ctx.restore();
   }
 
+  // Measure overlay
+  drawMeasure();
+
   // Hotspot pins
   const PC=['#00d4b8','#f5a623','#ff4e2a','#4ac8ff'];
   hotspots.forEach((hs,i)=>{
@@ -2085,11 +2141,249 @@ async function fetchAllData(){
 }
 
 // ═══════════════════════════════════════════
+// MAP MODE + SPOT POPUP + MEASURE
+// ═══════════════════════════════════════════
+
+let mapMode = 'pan'; // 'pan' | 'info' | 'measure'
+let measurePts = []; // up to 2 {lat,lng,x,y}
+let measureResult = null; // {dist_nm, dist_mi, dist_km}
+
+function setMapMode(mode){
+  if(mapMode === mode){ mode = 'pan'; } // toggle off
+  mapMode = mode;
+  document.getElementById('tbtn-info').classList.toggle('active', mode==='info');
+  document.getElementById('tbtn-measure').classList.toggle('active', mode==='measure');
+  cvs.style.cursor = mode==='info' ? 'crosshair' : mode==='measure' ? 'crosshair' : 'grab';
+  const banner = document.getElementById('measure-banner');
+  if(mode==='measure'){
+    measurePts=[];measureResult=null;
+    banner.style.display='block';
+    banner.textContent='📏 MEASURE — Click first point';
+  } else {
+    banner.style.display='none';
+  }
+  if(mode==='pan') closeSpotPopup();
+}
+
+// ── Coordinate format helpers ────────────────────────────────────
+function toDMS(deg, isLat){
+  const d=Math.floor(Math.abs(deg));
+  const mFull=(Math.abs(deg)-d)*60;
+  const m=Math.floor(mFull);
+  const s=((mFull-m)*60).toFixed(1);
+  const hem=isLat?(deg>=0?'N':'S'):(deg>=0?'E':'W');
+  return `${d}° ${m.toString().padStart(2,'0')}' ${s.padStart(4,'0')}" ${hem}`;
+}
+function toDDM(deg, isLat){
+  const d=Math.floor(Math.abs(deg));
+  const m=((Math.abs(deg)-d)*60).toFixed(4);
+  const hem=isLat?(deg>=0?'N':'S'):(deg>=0?'E':'W');
+  return `${d}° ${m}' ${hem}`;
+}
+
+// ── Loran-C TD calculation ────────────────────────────────────────
+// Chain 9960 (Southeast US) — stations M (Master, Carolina Beach NC),
+// W (Slave W, Jupiter FL), X (Slave X, Malone FL)
+// TD values computed from published baselines using the hyperbolic formula.
+// These are approximate — for display purposes.
+function loranTD(lat, lng){
+  // Master: 33.7718°N, 77.9078°W  (Carolina Beach, NC)
+  // W slave: 26.8956°N, 80.1117°W (Jupiter, FL)
+  // X slave: 30.5748°N, 85.9583°W (Malone, FL)
+  const c = 299792.458; // km/s speed of light
+  const GRS_A = 6378.137; // km
+  // Haversine distance in km
+  function dist(la1,lo1,la2,lo2){
+    const R=6371, dLat=(la2-la1)*Math.PI/180, dLon=(lo2-lo1)*Math.PI/180;
+    const a=Math.sin(dLat/2)**2+Math.cos(la1*Math.PI/180)*Math.cos(la2*Math.PI/180)*Math.sin(dLon/2)**2;
+    return R*2*Math.atan2(Math.sqrt(a),Math.sqrt(1-a));
+  }
+  const mLat=33.7718, mLng=-77.9078;
+  const wLat=26.8956, wLng=-80.1117;
+  const xLat=30.5748, xLng=-85.9583;
+  // TD = (dist to slave - dist to master) / c * 1e6  (microseconds)
+  const dm=dist(lat,lng,mLat,mLng);
+  const dw=dist(lat,lng,wLat,wLng);
+  const dx=dist(lat,lng,xLat,xLng);
+  const tdW = ((dw - dm) / c * 1e6 + 13621).toFixed(1); // +offset for chain baseline
+  const tdX = ((dx - dm) / c * 1e6 + 26000).toFixed(1);
+  return { W: tdW, X: tdX, chain:'9960' };
+}
+
+// ── Sample satellite pixel color at canvas point ─────────────────
+function getSatPixelData(cx, cy){
+  const result = {};
+  // Sample from satCanvas
+  try{
+    const tmp = document.createElement('canvas');
+    tmp.width=1; tmp.height=1;
+    const tc=tmp.getContext('2d');
+    tc.drawImage(satCvs, cx, cy, 1, 1, 0, 0, 1, 1);
+    const px=tc.getImageData(0,0,1,1).data;
+    if(px[3]>10){
+      // Try to estimate SST from hue
+      const [h,s,v]=rgbToHsv(px[0],px[1],px[2]);
+      if(s>0.15 && satLayers.sst && satCache.sst.img){
+        // Reverse the stretch to get physical value
+        const pMin=sstFtoPos(satRanges.sst.minF), pMax=sstFtoPos(satRanges.sst.maxF);
+        const stretchedPos=(SST_HUE_COLD-h)/SST_HUE_COLD;
+        const origPos=stretchedPos*(pMax-pMin)+pMin;
+        const tempF=SST_PHYS_MIN_F+origPos*(SST_PHYS_MAX_F-SST_PHYS_MIN_F);
+        if(tempF>50 && tempF<110) result.sst_f=tempF.toFixed(1);
+        result.sst_c=((tempF-32)*5/9).toFixed(1);
+      }
+      if(s>0.15 && satLayers.chl && satCache.chl.img){
+        const pMin=(satRanges.chl.minLog-CHL_PHYS_MIN_LOG)/(CHL_PHYS_MAX_LOG-CHL_PHYS_MIN_LOG);
+        const pMax=(satRanges.chl.maxLog-CHL_PHYS_MIN_LOG)/(CHL_PHYS_MAX_LOG-CHL_PHYS_MIN_LOG);
+        let hc=Math.min(h,CHL_HUE_LOW);
+        const stretchedPos=(CHL_HUE_LOW-hc)/CHL_HUE_LOW;
+        const origPos=stretchedPos*(pMax-pMin)+pMin;
+        const logVal=CHL_PHYS_MIN_LOG+origPos*(CHL_PHYS_MAX_LOG-CHL_PHYS_MIN_LOG);
+        const chlMg=Math.pow(10,logVal);
+        if(chlMg>0.005 && chlMg<100) result.chl_mg=chlMg.toFixed(3);
+      }
+    }
+  }catch(e){}
+  return result;
+}
+
+// ── Haversine distance ────────────────────────────────────────────
+function haversineDist(la1,lo1,la2,lo2){
+  const R=3440.065; // nm
+  const dLat=(la2-la1)*Math.PI/180, dLon=(lo2-lo1)*Math.PI/180;
+  const a=Math.sin(dLat/2)**2+Math.cos(la1*Math.PI/180)*Math.cos(la2*Math.PI/180)*Math.sin(dLon/2)**2;
+  const nm=R*2*Math.atan2(Math.sqrt(a),Math.sqrt(1-a));
+  return { nm:nm.toFixed(2), mi:(nm*1.15078).toFixed(2), km:(nm*1.852).toFixed(2) };
+}
+function bearingDeg(la1,lo1,la2,lo2){
+  const dLon=(lo2-lo1)*Math.PI/180;
+  const y=Math.sin(dLon)*Math.cos(la2*Math.PI/180);
+  const x=Math.cos(la1*Math.PI/180)*Math.sin(la2*Math.PI/180)-Math.sin(la1*Math.PI/180)*Math.cos(la2*Math.PI/180)*Math.cos(dLon);
+  return ((Math.atan2(y,x)*180/Math.PI)+360)%360;
+}
+
+// ── Open spot popup ───────────────────────────────────────────────
+function openSpotPopup(lat, lng, canvasX, canvasY){
+  const depth=depthAt(lat,lng);
+  const cur=interpCurrentAt(lat,lng);
+  const loran=loranTD(lat,lng);
+  const satPx=getSatPixelData(canvasX,canvasY);
+  const DIRS=['N','NNE','NE','ENE','E','ESE','SE','SSE','S','SSW','SW','WSW','W','WNW','NW','NNW'];
+
+  let html='';
+
+  // Coordinates block
+  html+=`<div class="sp-section">COORDINATES</div>`;
+  html+=`<div class="sp-coords-block">
+    <div class="sp-coord-line"><span>DD</span>${lat.toFixed(6)}°N, ${Math.abs(lng).toFixed(6)}°W</div>
+    <div class="sp-coord-line"><span>DDM</span>${toDDM(lat,true)}, ${toDDM(lng,false)}</div>
+    <div class="sp-coord-line"><span>DMS</span>${toDMS(lat,true)}</div>
+    <div class="sp-coord-line" style="padding-left:37px">${toDMS(lng,false)}</div>
+  </div>`;
+
+  // Loran
+  html+=`<div class="sp-section">LORAN-C · CHAIN ${loran.chain}</div>`;
+  html+=`<div class="sp-coords-block">
+    <div class="sp-coord-line"><span>TD-W</span>${loran.W} μs</div>
+    <div class="sp-coord-line"><span>TD-X</span>${loran.X} μs</div>
+  </div>`;
+
+  // Ocean data
+  html+=`<div class="sp-section">OCEAN DATA</div>`;
+
+  if(depth!==null && depth>0){
+    html+=`<div class="sp-row"><span class="sp-lbl">DEPTH</span><span class="sp-val teal">${Math.round(depth)} ft &nbsp;·&nbsp; ${Math.round(depth*0.3048)} m &nbsp;·&nbsp; ${Math.round(depth/6)} fm</span></div>`;
+  } else if(depth!==null && depth<=0){
+    html+=`<div class="sp-row"><span class="sp-lbl">DEPTH</span><span class="sp-val" style="color:var(--muted)">Land / shoal</span></div>`;
+  }
+
+  if(satPx.sst_f){
+    html+=`<div class="sp-row"><span class="sp-lbl">SAT SST</span><span class="sp-val hot">${satPx.sst_f}°F &nbsp;·&nbsp; ${satPx.sst_c}°C</span></div>`;
+  }
+  if(satPx.chl_mg){
+    const chlNum=parseFloat(satPx.chl_mg);
+    const chlClass=chlNum>1?'warm':chlNum>0.3?'teal':'sp-val';
+    html+=`<div class="sp-row"><span class="sp-lbl">SAT CHL-A</span><span class="sp-val ${chlClass}">${satPx.chl_mg} mg/m³</span></div>`;
+  }
+  if(cur && currentGrid.length>0 && cur.speed_kt>0.01){
+    const dirName=DIRS[Math.round(cur.dir_deg/22.5)%16];
+    html+=`<div class="sp-row"><span class="sp-lbl">CURRENT</span><span class="sp-val bait">${cur.speed_kt.toFixed(2)} kt &nbsp;→&nbsp; ${dirName} (${Math.round(cur.dir_deg)}°)</span></div>`;
+  }
+
+  document.getElementById('spot-popup-body').innerHTML=html;
+
+  // Position popup near click but keep on screen
+  const popup=document.getElementById('spot-popup');
+  popup.style.display='block';
+  const mapRect=document.getElementById('mapwrap').getBoundingClientRect();
+  const px=canvasX+mapRect.left+document.getElementById('mapwrap').offsetLeft;
+  const py=canvasY+mapRect.top;
+
+  // Use offsetWidth after display:block
+  setTimeout(()=>{
+    const pw=popup.offsetWidth, ph=popup.offsetHeight;
+    const mw=mapRect.width, mh=mapRect.height;
+    let left=canvasX+16, top=canvasY-10;
+    if(left+pw>mw-10) left=canvasX-pw-16;
+    if(top+ph>mh-10) top=mh-ph-10;
+    if(top<10) top=10;
+    popup.style.left=left+'px';
+    popup.style.top=top+'px';
+  },0);
+}
+
+function closeSpotPopup(){
+  document.getElementById('spot-popup').style.display='none';
+  measurePts=[];measureResult=null;
+}
+
+// ── Draw measure overlay on mapCanvas ────────────────────────────
+function drawMeasure(){
+  if(mapMode!=='measure' || !measurePts.length) return;
+  ctx.save();
+  const [p1]=measurePts;
+  // Draw first point
+  ctx.beginPath(); ctx.arc(p1.x,p1.y,6,0,Math.PI*2);
+  ctx.fillStyle='var(--warm)'; ctx.fill();
+  ctx.strokeStyle='#fff'; ctx.lineWidth=1.5; ctx.stroke();
+
+  if(measurePts.length===2){
+    const p2=measurePts[1];
+    // Line
+    ctx.beginPath(); ctx.moveTo(p1.x,p1.y); ctx.lineTo(p2.x,p2.y);
+    ctx.strokeStyle='rgba(245,166,35,0.9)'; ctx.lineWidth=2; ctx.setLineDash([6,4]); ctx.stroke();
+    ctx.setLineDash([]);
+    // Second point
+    ctx.beginPath(); ctx.arc(p2.x,p2.y,6,0,Math.PI*2);
+    ctx.fillStyle='var(--warm)'; ctx.fill();
+    ctx.strokeStyle='#fff'; ctx.lineWidth=1.5; ctx.stroke();
+    // Label at midpoint
+    if(measureResult){
+      const mx=(p1.x+p2.x)/2, my=(p1.y+p2.y)/2;
+      const bear=bearingDeg(p1.lat,p1.lng,p2.lat,p2.lng);
+      const label=`${measureResult.nm}nm · ${measureResult.mi}mi · ${measureResult.km}km · ${Math.round(bear)}°`;
+      ctx.font='bold 10px "Space Mono",monospace';
+      const tw=ctx.measureText(label).width;
+      ctx.fillStyle='rgba(2,12,22,0.85)'; ctx.strokeStyle='rgba(245,166,35,0.7)'; ctx.lineWidth=1;
+      ctx.beginPath(); ctx.roundRect(mx-tw/2-6,my-16,tw+12,20,4); ctx.fill(); ctx.stroke();
+      ctx.fillStyle='var(--warm)'; ctx.textAlign='center';
+      ctx.shadowColor='rgba(0,0,0,0.8)'; ctx.shadowBlur=2;
+      ctx.fillText(label,mx,my-2);
+      ctx.textAlign='left'; ctx.shadowBlur=0;
+    }
+  }
+  ctx.restore();
+}
+
+// ═══════════════════════════════════════════
 // INTERACTION
 // ═══════════════════════════════════════════
 function zoom(f){vp.scale=Math.max(0.1,Math.min(20,vp.scale*f));}
 cvs.addEventListener('wheel',e=>{e.preventDefault();zoom(e.deltaY<0?1.15:0.87);},{passive:false});
-cvs.addEventListener('mousedown',e=>{drag={x:e.clientX,y:e.clientY,lat:vp.lat,lng:vp.lng};});
+cvs.addEventListener('mousedown',e=>{
+  if(mapMode!=='pan') return; // block drag in info/measure mode
+  drag={x:e.clientX,y:e.clientY,lat:vp.lat,lng:vp.lng};
+});
 cvs.addEventListener('mousemove',e=>{
   if(drag){
     const dlat=BASE_DLAT/vp.scale,dlng=BASE_DLNG/vp.scale;
@@ -2104,11 +2398,55 @@ cvs.addEventListener('mousemove',e=>{
   if(cur&&currentGrid.length>0&&cur.speed_kt>0.05)txt+=`  ·  ${cur.speed_kt.toFixed(2)}kt`;
   document.getElementById('mcoords').textContent=txt;
 });
-cvs.addEventListener('mouseup',()=>{drag=null;});
+cvs.addEventListener('mouseup',e=>{
+  if(drag){ drag=null; return; }
+});
+cvs.addEventListener('click',e=>{
+  const[lat,lng]=canvasToGeo(e.offsetX,e.offsetY);
+  if(mapMode==='info'){
+    openSpotPopup(lat,lng,e.offsetX,e.offsetY);
+    return;
+  }
+  if(mapMode==='measure'){
+    const pt={lat,lng,x:e.offsetX,y:e.offsetY};
+    if(measurePts.length===0){
+      measurePts=[pt];
+      document.getElementById('measure-banner').textContent='📏 MEASURE — Click second point';
+    } else if(measurePts.length===1){
+      measurePts.push(pt);
+      measureResult=haversineDist(measurePts[0].lat,measurePts[0].lng,lat,lng);
+      const bear=bearingDeg(measurePts[0].lat,measurePts[0].lng,lat,lng);
+      document.getElementById('measure-banner').textContent=
+        `📏 ${measureResult.nm} nm · ${measureResult.mi} mi · ${measureResult.km} km · ${Math.round(bear)}° · Click to reset`;
+    } else {
+      measurePts=[pt]; measureResult=null;
+      document.getElementById('measure-banner').textContent='📏 MEASURE — Click second point';
+    }
+    return;
+  }
+});
 cvs.addEventListener('mouseleave',()=>{drag=null;});
-cvs.addEventListener('touchstart',e=>{const t2=e.touches[0];drag={x:t2.clientX,y:t2.clientY,lat:vp.lat,lng:vp.lng};},{passive:true});
+cvs.addEventListener('touchstart',e=>{
+  if(mapMode!=='pan') return;
+  const t2=e.touches[0];drag={x:t2.clientX,y:t2.clientY,lat:vp.lat,lng:vp.lng};
+},{passive:true});
 cvs.addEventListener('touchmove',e=>{if(!drag)return;const t2=e.touches[0];const dlat=BASE_DLAT/vp.scale,dlng=BASE_DLNG/vp.scale;vp.lat=drag.lat+(t2.clientY-drag.y)/cvs.height*dlat;vp.lng=drag.lng-(t2.clientX-drag.x)/cvs.width*dlng;},{passive:true});
-cvs.addEventListener('touchend',()=>{drag=null;});
+cvs.addEventListener('touchend',e=>{
+  if(mapMode!=='pan' && e.changedTouches.length){
+    const t2=e.changedTouches[0];
+    const rect=cvs.getBoundingClientRect();
+    const fx=t2.clientX-rect.left, fy=t2.clientY-rect.top;
+    const[lat,lng]=canvasToGeo(fx,fy);
+    if(mapMode==='info') openSpotPopup(lat,lng,fx,fy);
+    if(mapMode==='measure'){
+      const pt={lat,lng,x:fx,y:fy};
+      if(measurePts.length<2){ measurePts.push(pt); if(measurePts.length===2){ measureResult=haversineDist(measurePts[0].lat,measurePts[0].lng,lat,lng); }}
+      else { measurePts=[pt]; measureResult=null; }
+    }
+    return;
+  }
+  drag=null;
+});
 
 function toggleSat(key){
   satLayers[key]=!satLayers[key];
