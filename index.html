@@ -224,6 +224,11 @@ input[type=range].rng.sst-rng::-moz-range-thumb{background:var(--hot);}
         <div class="tog on" id="tog-chl"></div>
       </div>
       <div class="sat-badge idle" id="sb-chl"><div class="dot"></div><span id="sl-chl">Not loaded</span></div>
+      <div class="rng-row" style="margin-top:4px">
+        <span class="rng-tag">α</span>
+        <input type="range" class="rng" id="chl-alpha-q" min="0.1" max="1" step="0.05" value="0.85" oninput="onLayerAlpha('chl-q')">
+        <span class="rng-vals" id="chl-alpha-q-lbl">85%</span>
+      </div>
 
       <!-- SST -->
       <div class="layer-btn active" id="btn-sst" onclick="toggleSat('sst')">
@@ -235,6 +240,11 @@ input[type=range].rng.sst-rng::-moz-range-thumb{background:var(--hot);}
         <div class="tog on" id="tog-sst"></div>
       </div>
       <div class="sat-badge idle" id="sb-sst"><div class="dot"></div><span id="sl-sst">Not loaded</span></div>
+      <div class="rng-row" style="margin-top:4px">
+        <span class="rng-tag">α</span>
+        <input type="range" class="rng sst-rng" id="sst-alpha-q" min="0.1" max="1" step="0.05" value="0.80" oninput="onLayerAlpha('sst-q')">
+        <span class="rng-vals" id="sst-alpha-q-lbl">80%</span>
+      </div>
 
       <!-- True Color -->
       <div class="layer-btn" id="btn-tc" onclick="toggleSat('tc')">
@@ -246,6 +256,11 @@ input[type=range].rng.sst-rng::-moz-range-thumb{background:var(--hot);}
         <div class="tog" id="tog-tc"></div>
       </div>
       <div class="sat-badge idle" id="sb-tc"><div class="dot"></div><span id="sl-tc">Not loaded</span></div>
+      <div class="rng-row" style="margin-top:4px">
+        <span class="rng-tag">α</span>
+        <input type="range" class="rng" id="tc-alpha-q" min="0.1" max="1" step="0.05" value="1.0" oninput="onLayerAlpha('tc-q')">
+        <span class="rng-vals" id="tc-alpha-q-lbl">100%</span>
+      </div>
 
       <!-- NOAA Chart -->
       <div class="layer-btn" id="btn-noaa" onclick="toggleNoaaChart()">
@@ -257,6 +272,11 @@ input[type=range].rng.sst-rng::-moz-range-thumb{background:var(--hot);}
         <div class="tog" id="tog-noaa"></div>
       </div>
       <div class="sat-badge idle" id="sb-noaa"><div class="dot"></div><span id="sl-noaa">Not loaded</span></div>
+      <div class="rng-row" style="margin-top:4px">
+        <span class="rng-tag">α</span>
+        <input type="range" class="rng" id="noaa-alpha" min="0.1" max="1" step="0.05" value="1" oninput="onLayerAlpha('noaa')">
+        <span class="rng-vals" id="noaa-alpha-lbl">100%</span>
+      </div>
     </div>
 
     <div class="sb-sec">
@@ -531,6 +551,40 @@ const satRanges = {
   sst: { minF:72, maxF:88, gamma:1, alpha:0.80 }
 };
 
+// Per-layer quick opacity (independent of the detailed range sliders)
+const layerAlpha = { noaa:1.0, chl:0.85, sst:0.80, tc:1.0 };
+
+function onLayerAlpha(key){
+  const slider = document.getElementById(key+'-alpha'+(key.endsWith('-q')?'':'-q')||key+'-alpha');
+  // map slider IDs:  noaa→noaa-alpha, chl-q→chl-alpha-q, sst-q→sst-alpha-q, tc-q→tc-alpha-q
+  let sliderEl, lblEl, stateKey;
+  if(key==='noaa'){
+    sliderEl=document.getElementById('noaa-alpha'); lblEl=document.getElementById('noaa-alpha-lbl'); stateKey='noaa';
+  } else if(key==='chl-q'){
+    sliderEl=document.getElementById('chl-alpha-q'); lblEl=document.getElementById('chl-alpha-q-lbl'); stateKey='chl';
+  } else if(key==='sst-q'){
+    sliderEl=document.getElementById('sst-alpha-q'); lblEl=document.getElementById('sst-alpha-q-lbl'); stateKey='sst';
+  } else if(key==='tc-q'){
+    sliderEl=document.getElementById('tc-alpha-q'); lblEl=document.getElementById('tc-alpha-q-lbl'); stateKey='tc';
+  }
+  if(!sliderEl) return;
+  const val = parseFloat(sliderEl.value);
+  layerAlpha[stateKey] = val;
+  if(lblEl) lblEl.textContent = Math.round(val*100)+'%';
+  // Also keep detailed alpha sliders in sync for chl/sst
+  if(stateKey==='chl'){
+    satRanges.chl.alpha = val;
+    document.getElementById('chl-alpha').value = val;
+    document.getElementById('chl-alpha-lbl').textContent = Math.round(val*100)+'%';
+  }
+  if(stateKey==='sst'){
+    satRanges.sst.alpha = val;
+    document.getElementById('sst-alpha').value = val;
+    document.getElementById('sst-alpha-lbl').textContent = Math.round(val*100)+'%';
+  }
+  drawSatellite();
+}
+
 function onChlChange(){
   satRanges.chl.minLog = parseFloat(document.getElementById('chl-min').value);
   satRanges.chl.maxLog = parseFloat(document.getElementById('chl-max').value);
@@ -540,6 +594,9 @@ function onChlChange(){
   document.getElementById('chl-max-lbl').textContent  = Math.pow(10,satRanges.chl.maxLog).toFixed(1);
   document.getElementById('chl-gamma-lbl').textContent= satRanges.chl.gamma.toFixed(2)+'×';
   document.getElementById('chl-alpha-lbl').textContent= Math.round(satRanges.chl.alpha*100)+'%';
+  layerAlpha.chl = satRanges.chl.alpha;
+  document.getElementById('chl-alpha-q').value = satRanges.chl.alpha;
+  document.getElementById('chl-alpha-q-lbl').textContent = Math.round(satRanges.chl.alpha*100)+'%';
   drawSatellite();
 }
 function resetChl(){
@@ -559,6 +616,9 @@ function onSstChange(){
   document.getElementById('sst-max-lbl').textContent  = satRanges.sst.maxF.toFixed(1)+'°F';
   document.getElementById('sst-gamma-lbl').textContent= satRanges.sst.gamma.toFixed(2)+'×';
   document.getElementById('sst-alpha-lbl').textContent= Math.round(satRanges.sst.alpha*100)+'%';
+  layerAlpha.sst = satRanges.sst.alpha;
+  document.getElementById('sst-alpha-q').value = satRanges.sst.alpha;
+  document.getElementById('sst-alpha-q-lbl').textContent = Math.round(satRanges.sst.alpha*100)+'%';
   drawSatellite();
 }
 function resetSst(){
@@ -760,15 +820,15 @@ function drawSatellite(){
   satCtx.clearRect(0,0,W,H);
   satCtx.globalCompositeOperation='source-over';
 
-  // NOAA Nautical Chart — drawn first as base
+  // NOAA Nautical Chart — drawn first as base, uses layerAlpha.noaa
   if(noaaChartOn && noaaChartCache.img){
-    try{ satCtx.globalAlpha=1.0; satCtx.drawImage(noaaChartCache.img,0,0,W,H); }catch(e){}
+    try{ satCtx.globalAlpha=layerAlpha.noaa; satCtx.drawImage(noaaChartCache.img,0,0,W,H); }catch(e){}
   }
 
-  // Draw true color first (base)
+  // Draw true color, uses layerAlpha.tc
   if(satLayers.tc && satCache.tc.img){
     try{
-      satCtx.globalAlpha=1.0;
+      satCtx.globalAlpha=layerAlpha.tc;
       satCtx.drawImage(satCache.tc.img,0,0,W,H);
     }catch(e){}
   }
