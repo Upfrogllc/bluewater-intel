@@ -551,6 +551,37 @@ input[type=range].rng.sst-rng::-moz-range-thumb{background:var(--hot);}
         <button onclick="selectBillfish()" style="border-color:var(--border);">Billfish</button>
         <button onclick="selectPelagic()" style="border-color:var(--border);">Pelagic</button>
       </div>
+
+      <!-- Home port + radius OR viewport mode -->
+      <div style="margin-top:10px;padding-top:9px;border-top:1px solid var(--border)">
+        <div style="font-family:'Bebas Neue';font-size:11px;letter-spacing:2px;color:var(--warm);margin-bottom:6px;">Search Area</div>
+        <div style="display:flex;gap:4px;margin-bottom:6px;">
+          <button id="mode-viewport" class="src-btn active" onclick="setSearchMode('viewport')" style="flex:1;padding:5px 4px;font-size:7px;">📺 Visible Map</button>
+          <button id="mode-port"     class="src-btn"        onclick="setSearchMode('port')"     style="flex:1;padding:5px 4px;font-size:7px;">⚓ Home Port</button>
+        </div>
+        <div id="port-config" style="display:none">
+          <select id="port-select" onchange="onPortSelect()" style="width:100%;padding:5px;background:#ffffff08;border:1px solid var(--border);border-radius:4px;color:var(--text);font-family:'Space Mono';font-size:8px;margin-bottom:5px;">
+            <option value="psl">Port St. Lucie Inlet (27.17°N, 80.18°W)</option>
+            <option value="ftlaud">Ft. Lauderdale (26.08°N, 80.10°W)</option>
+            <option value="miami">Miami (25.77°N, 80.13°W)</option>
+            <option value="keys">Marathon/Keys (24.72°N, 81.00°W)</option>
+            <option value="cb">Canaveral (28.41°N, 80.59°W)</option>
+            <option value="daytona">Daytona/Ponce (29.08°N, 80.92°W)</option>
+            <option value="jax">Jacksonville (30.40°N, 81.43°W)</option>
+            <option value="custom">Custom coordinates...</option>
+          </select>
+          <div id="custom-coords" style="display:none;margin-bottom:5px;">
+            <input id="port-lat" type="number" step="0.01" placeholder="Lat e.g. 27.17" style="width:48%;padding:4px;background:#ffffff08;border:1px solid var(--border);border-radius:4px;color:var(--text);font-family:'Space Mono';font-size:8px;">
+            <input id="port-lng" type="number" step="0.01" placeholder="Lng e.g. -80.18" style="width:48%;padding:4px;background:#ffffff08;border:1px solid var(--border);border-radius:4px;color:var(--text);font-family:'Space Mono';font-size:8px;margin-left:2px;">
+          </div>
+          <div style="display:flex;align-items:center;gap:6px;">
+            <span style="font-family:'Space Mono';font-size:8px;color:var(--muted);white-space:nowrap">Radius</span>
+            <input type="range" class="rng" id="search-radius" min="20" max="200" step="10" value="80" oninput="document.getElementById('radius-lbl').textContent=this.value+'mi'">
+            <span class="rng-vals" id="radius-lbl" style="white-space:nowrap">80mi</span>
+          </div>
+        </div>
+        <div id="viewport-note" style="font-family:'Space Mono';font-size:7px;color:var(--muted);line-height:1.5">AI will only recommend spots visible on screen</div>
+      </div>
     </div>
 
     <div id="aibody">
@@ -2057,6 +2088,66 @@ function updateAnalyzeBtn(){
   else btn.textContent=`🎯 ANALYZE ${n} SPECIES`;
 }
 
+// ── Search area mode (viewport vs home port radius) ──
+let searchMode = 'viewport'; // 'viewport' | 'port'
+const HOME_PORTS = {
+  psl:     { name:'Port St. Lucie Inlet',   lat:27.170, lng:-80.178 },
+  ftlaud:  { name:'Ft. Lauderdale Inlet',   lat:26.078, lng:-80.103 },
+  miami:   { name:'Miami (Haulover)',        lat:25.769, lng:-80.130 },
+  keys:    { name:'Marathon / Boot Key',     lat:24.718, lng:-81.003 },
+  cb:      { name:'Cape Canaveral',          lat:28.413, lng:-80.588 },
+  daytona: { name:'Ponce Inlet / Daytona',  lat:29.082, lng:-80.921 },
+  jax:     { name:'Jacksonville/St. Johns', lat:30.398, lng:-81.430 },
+};
+
+function setSearchMode(mode){
+  searchMode = mode;
+  document.getElementById('mode-viewport').classList.toggle('active', mode==='viewport');
+  document.getElementById('mode-port').classList.toggle('active', mode==='port');
+  document.getElementById('port-config').style.display = mode==='port' ? 'block' : 'none';
+  document.getElementById('viewport-note').style.display = mode==='viewport' ? 'block' : 'none';
+}
+
+function onPortSelect(){
+  const v = document.getElementById('port-select').value;
+  document.getElementById('custom-coords').style.display = v==='custom' ? 'block' : 'none';
+}
+
+function getSearchBounds(){
+  // Returns {south, north, west, east, centerLat, centerLng, radiusMi, label}
+  if(searchMode === 'viewport'){
+    const b = getViewBounds();
+    const clat = (b.south+b.north)/2, clng = (b.west+b.east)/2;
+    const radiusMi = Math.max(
+      Math.abs(b.north-b.south)*69/2,
+      Math.abs(b.east-b.west)*69*Math.cos(clat*Math.PI/180)/2
+    );
+    return { ...b, centerLat:clat, centerLng:clng, radiusMi:Math.round(radiusMi), label:'visible map area' };
+  } else {
+    // Port + radius mode
+    const sel = document.getElementById('port-select').value;
+    let clat, clng, portName;
+    if(sel==='custom'){
+      clat = parseFloat(document.getElementById('port-lat').value) || 27.17;
+      clng = parseFloat(document.getElementById('port-lng').value) || -80.18;
+      portName = 'Custom port';
+    } else {
+      const p = HOME_PORTS[sel] || HOME_PORTS.psl;
+      clat = p.lat; clng = p.lng; portName = p.name;
+    }
+    const radiusMi = parseInt(document.getElementById('search-radius').value) || 80;
+    // Convert radius to degrees (approx)
+    const dLat = radiusMi / 69;
+    const dLng = radiusMi / (69 * Math.cos(clat * Math.PI/180));
+    return {
+      south: clat-dLat, north: clat+dLat,
+      west:  clng-dLng, east:  clng+dLng,
+      centerLat: clat, centerLng: clng,
+      radiusMi, label: `within ${radiusMi}mi of ${portName}`
+    };
+  }
+}
+
 // ═══════════════════════════════════════════
 // AI ANALYSIS
 // ═══════════════════════════════════════════
@@ -2115,7 +2206,15 @@ async function runAnalysis(){
 
   const month=['January','February','March','April','May','June','July','August','September','October','November','December'][new Date().getMonth()];
 
-  const prompt=`You are an expert offshore fishing guide for the Treasure Coast of Florida (Port St. Lucie). Analyze this REAL oceanographic data. TARGET SPECIES: ${spNames}.
+  // Get constrained search area — either visible viewport or home port radius
+  const sb = getSearchBounds();
+  const boundsDesc = `SEARCH AREA: ${sb.label}.
+Lat bounds: ${sb.south.toFixed(3)}°N to ${sb.north.toFixed(3)}°N
+Lng bounds: ${sb.west.toFixed(3)}°W to ${sb.east.toFixed(3)}°W
+Center: ${sb.centerLat.toFixed(3)}°N, ${Math.abs(sb.centerLng).toFixed(3)}°W
+HARD CONSTRAINT: Every hotspot lat/lng MUST be within these exact bounds. Do not recommend spots outside this area.`;
+
+  const prompt=`You are an expert offshore fishing guide. Analyze this REAL oceanographic data. TARGET SPECIES: ${spNames}.
 
 SATELLITE DATA (${selectedDate}):
 ${satContext}
@@ -2125,18 +2224,22 @@ ${curSummary}
 
 ${eddyContext}
 
-DEPTH STRUCTURE (from St. Lucie Inlet 27.17N, 80.18W):
-30ft@3mi, 60ft@5mi, 100ft@8mi, 200ft@13mi, 600ft@22mi, 1000ft@35mi offshore.
+${boundsDesc}
+
 Month: ${month}.
 
 TARGET SPECIES PROFILES:
 ${spContext}
 
-For EACH hotspot, specify which target species is most likely there and WHY based on the oceanographic conditions. If multiple species are targeted, give each the hotspot most suited to it. Be species-specific — a wahoo spot differs from a sailfish spot even at similar locations.
-Identify 3-4 specific fishing hotspots. Use the satellite chlorophyll patterns (green = bait concentration), SST temperature breaks, current edges, eddy features, and depth structure. Be specific about WHY each spot is productive based on the real data above.
+INSTRUCTIONS:
+- CRITICAL: All hotspot coordinates MUST fall within the bounds above. No exceptions.
+- For EACH hotspot, specify which target species is most likely there and why.
+- Use actual satellite chlorophyll patterns (color breaks = bait), SST temperature breaks, current edges, eddy features, and depth structure.
+- Be species-specific — a wahoo spot differs from a sailfish spot even at similar coordinates.
+- Identify 3-4 specific fishing hotspots within the search area.
 
 Respond ONLY valid JSON:
-{"overall":"2-3 sentence assessment focused on conditions for ${spNames}","conditions_rating":"Excellent|Good|Fair|Poor","avg_current_kt":"${avgSpd}","dominant_flow":"${domDir}","hotspots":[{"name":"descriptive name","location":"X miles bearing from St Lucie Inlet","lat":27.15,"lng":-79.88,"why":"specific reason citing satellite/current data AND why this suits the target species","species":["Blue Marlin"],"primary_species":"Blue Marlin","technique":"specific method for this species in these conditions","confidence":"High|Medium|Low","depth_target":"1000ft+"}],"pro_tip":"one species-specific actionable tip for ${spNames} today"}`;
+{"overall":"2-3 sentence assessment of conditions for ${spNames} in this specific area","conditions_rating":"Excellent|Good|Fair|Poor","avg_current_kt":"${avgSpd}","dominant_flow":"${domDir}","hotspots":[{"name":"descriptive name","location":"bearing and distance from nearest recognizable reference","lat":${sb.centerLat.toFixed(3)},"lng":${sb.centerLng.toFixed(3)},"why":"specific reason citing satellite/current data AND why this suits the target species","species":["Blue Marlin"],"primary_species":"Blue Marlin","technique":"specific method for this species in these conditions","confidence":"High|Medium|Low","depth_target":"1000ft+"}],"pro_tip":"one species-specific actionable tip for ${spNames} today"}`;
 
   try{
     const res=await fetch('https://api.anthropic.com/v1/messages',{
@@ -2147,7 +2250,20 @@ Respond ONLY valid JSON:
     if(!res.ok){const e=await res.json();throw new Error(e.error?.message||`HTTP ${res.status}`);}
     const data=await res.json();
     const parsed=JSON.parse(data.content.map(i=>i.text||'').join('').replace(/```json|```/g,'').trim());
-    hotspots=parsed.hotspots||[];
+    // Clamp hotspots to search bounds — guard against AI ignoring constraints
+    const rawHs = parsed.hotspots||[];
+    hotspots = rawHs.filter(hs => {
+      const lat = parseFloat(hs.lat), lng = parseFloat(hs.lng);
+      if(isNaN(lat)||isNaN(lng)) return false;
+      const inBounds = lat>=sb.south && lat<=sb.north && lng>=sb.west && lng<=sb.east;
+      if(!inBounds) console.warn('Hotspot outside bounds, dropped:', hs.name, lat, lng);
+      return inBounds;
+    });
+    if(!hotspots.length && rawHs.length){
+      // All were outside — keep them anyway (better than nothing) but log it
+      console.warn('All hotspots were outside bounds — showing anyway');
+      hotspots = rawHs;
+    }
     renderResults(parsed);
   }catch(e){
     document.getElementById('aibody').innerHTML=`<div class="aimt"><div class="aimt-ico">⚠️</div><div class="aimt-txt">Analysis failed:<br><small style="color:var(--muted)">${e.message}</small></div></div>`;
