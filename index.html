@@ -317,6 +317,25 @@ input[type=range].rng.sst-rng::-moz-range-thumb{background:var(--hot);}
         <span class="lb-src">Modeled</span>
         <div class="tog on" id="tog-gs"></div>
       </div>
+
+      <div class="layer-btn active" id="btn-frt" onclick="toggleLayer('frt')">
+        <div class="lb-left">
+          <div class="lb-dot" style="background:#ff44ff;box-shadow:0 0 5px #ff44ff66"></div>
+          <span>SST &amp; Chl Fronts</span>
+        </div>
+        <span class="lb-src">Computed</span>
+        <div class="tog on" id="tog-frt"></div>
+      </div>
+      <div style="padding:4px 10px 6px;font-family:'Space Mono';font-size:8px;color:var(--muted);line-height:1.6">
+        <span style="color:#ff88ff">━</span> SST front &nbsp;
+        <span style="color:#44ffaa">━</span> Chl front<br>
+        Thickness = gradient strength
+      </div>
+      <div class="rng-row" style="padding:0 10px 8px">
+        <span class="rng-tag">sens</span>
+        <input type="range" class="rng" id="frt-thresh" min="1" max="20" step="1" value="6" oninput="document.getElementById('frt-thresh-lbl').textContent=this.value;detectedFronts=null;">
+        <span class="rng-vals" id="frt-thresh-lbl">6</span>
+      </div>
     </div>
 
     <div class="sb-sec">
@@ -513,7 +532,7 @@ const satCache = {chl:{img:null,key:'',status:'idle'}, sst:{img:null,key:'',stat
 const satLayers = {chl:true, sst:true, tc:false};
 let noaaChartOn = false;
 let noaaChartCache = {img:null, key:''};
-const layers    = {cur:true, edy:true, dep:true, gs:true};
+const layers    = {cur:true, edy:true, dep:true, gs:true, frt:true};
 
 // Date state — default to 3 days ago (most reliable satellite data)
 const today = new Date();
@@ -667,6 +686,7 @@ function shiftDate(days){
 function onDateChange(){
   selectedDate=document.getElementById('date-input').value;
   Object.keys(satCache).forEach(k=>{satCache[k].key='';satCache[k].img=null;satCache[k].status='idle';});
+  detectedFronts = null;
   setSatStatus('chl','idle','—'); setSatStatus('sst','idle','—'); setSatStatus('tc','idle','—');
   loadAllSatellite();
 }
@@ -1099,6 +1119,122 @@ function drawEddies(t){
 }
 
 // ═══════════════════════════════════════════
+// FRONT DETECTION — edge detection on sat images
+// ═══════════════════════════════════════════
+let detectedFronts = null; // {sst:[], chl:[]} arrays of {x0,y0,x1,y1,strength}
+
+function detectFronts(){
+  const W = satCvs.width, H = satCvs.height;
+  if(!W || !H) return {sst:[], chl:[]};
+
+  const thresh = parseInt(document.getElementById('frt-thresh')?.value || '6');
+  const result = {sst:[], chl:[]};
+
+  // For each active satellite layer, sample pixel data and find steep gradients
+  const targets = [];
+  if(satLayers.sst && satCache.sst.img) targets.push({key:'sst', img:satCache.sst.img});
+  if(satLayers.chl && satCache.chl.img) targets.push({key:'chl', img:satCache.chl.img});
+
+  for(const {key, img} of targets){
+    // Render the raw satellite image to a temp offscreen canvas
+    const tmp = document.createElement('canvas'); tmp.width=W; tmp.height=H;
+    const tc  = tmp.getContext('2d');
+    tc.drawImage(img, 0, 0, W, H);
+
+    let px;
+    try { px = tc.getImageData(0, 0, W, H).data; }
+    catch(e){ continue; } // tainted canvas — skip
+
+    // Convert to single-channel luminance array
+    const lum = new Float32Array(W*H);
+    for(let i=0;i<W*H;i++){
+      const b = i*4;
+      // Skip fully transparent pixels (no-data areas)
+      if(px[b+3] < 10){ lum[i] = -1; continue; }
+      lum[i] = (px[b]*0.299 + px[b+1]*0.587 + px[b+2]*0.114);
+    }
+
+    // Sobel edge detection — stride every 4px for speed
+    const step = 4;
+    const segs = [];
+    for(let y=step; y<H-step; y+=step){
+      for(let x=step; x<W-step; x+=step){
+        const l = (r,c)=>{ const v=lum[r*W+c]; return v<0?null:v; };
+        const tl=l(y-step,x-step), tc2=l(y-step,x), tr=l(y-step,x+step);
+        const ml=l(y,x-step),             mr=l(y,x+step);
+        const bl=l(y+step,x-step), bc=l(y+step,x), br=l(y+step,x+step);
+        if(tl==null||tr==null||bl==null||br==null||ml==null||mr==null) continue;
+        const gx = (-tl + tr - 2*ml + 2*mr - bl + br);
+        const gy = (-tl - 2*tc2 - tr + bl + 2*bc + br);
+        const mag = Math.sqrt(gx*gx + gy*gy);
+        if(mag < thresh*10) continue; // threshold
+        // Front segment: perpendicular to gradient direction
+        const angle = Math.atan2(gy, gx) + Math.PI/2;
+        const half  = Math.min(step*1.5, 8);
+        segs.push({
+          x0: x + Math.cos(angle)*half,
+          y0: y + Math.sin(angle)*half,
+          x1: x - Math.cos(angle)*half,
+          y1: y - Math.sin(angle)*half,
+          strength: Math.min(1, mag/800)
+        });
+      }
+    }
+    result[key] = segs;
+  }
+  return result;
+}
+
+function drawFronts(){
+  if(!layers.frt) return;
+  const W = cvs.width, H = cvs.height;
+
+  // Re-detect when fronts are null (cleared on layer/date change)
+  if(!detectedFronts){
+    const hasSat = (satLayers.sst && satCache.sst.img) || (satLayers.chl && satCache.chl.img);
+    if(!hasSat) return;
+    detectedFronts = detectFronts();
+  }
+
+  ctx.save();
+
+  // Draw SST fronts — magenta/pink
+  if(detectedFronts.sst && detectedFronts.sst.length){
+    for(const seg of detectedFronts.sst){
+      const w = 1 + seg.strength * 2.5;
+      const a = 0.5 + seg.strength * 0.45;
+      ctx.strokeStyle = `rgba(255,80,220,${a})`;
+      ctx.lineWidth = w;
+      ctx.shadowColor = 'rgba(255,60,200,0.6)';
+      ctx.shadowBlur  = seg.strength > 0.5 ? 4 : 1;
+      ctx.beginPath();
+      ctx.moveTo(seg.x0, seg.y0);
+      ctx.lineTo(seg.x1, seg.y1);
+      ctx.stroke();
+    }
+  }
+
+  // Draw Chl fronts — bright cyan-green
+  if(detectedFronts.chl && detectedFronts.chl.length){
+    for(const seg of detectedFronts.chl){
+      const w = 1 + seg.strength * 2.5;
+      const a = 0.5 + seg.strength * 0.45;
+      ctx.strokeStyle = `rgba(50,255,160,${a})`;
+      ctx.lineWidth = w;
+      ctx.shadowColor = 'rgba(30,255,140,0.6)';
+      ctx.shadowBlur  = seg.strength > 0.5 ? 4 : 1;
+      ctx.beginPath();
+      ctx.moveTo(seg.x0, seg.y0);
+      ctx.lineTo(seg.x1, seg.y1);
+      ctx.stroke();
+    }
+  }
+
+  ctx.shadowBlur = 0;
+  ctx.restore();
+}
+
+// ═══════════════════════════════════════════
 // MAIN CANVAS DRAW (overlays only — satellite is on satCanvas)
 // ═══════════════════════════════════════════
 function draw(){
@@ -1190,6 +1326,9 @@ function draw(){
   // Eddies
   if(layers.edy && currentGrid.length>0) drawEddies(t);
 
+  // SST & Chlorophyll fronts
+  drawFronts();
+
   // Landmarks
   ctx.save();
   const txtColor=hasSat?'rgba(255,255,255,0.9)':'#fff';
@@ -1266,6 +1405,7 @@ function loop(ts){
       loop._lastVKey=vKey;
       bgCacheKey='';contourCacheKey='';
       Object.keys(satCache).forEach(k=>satCache[k].key='');
+      detectedFronts = null; // viewport moved — recompute fronts
       // Only reload NOAA chart if moved significantly (saves bandwidth)
       const nb=getViewBounds(),lb=noaaChartCache._lastBounds||{};
       if(Math.abs((nb.west)-(lb.west||99))>0.5||Math.abs((nb.north)-(lb.north||99))>0.5){
@@ -1403,6 +1543,7 @@ function toggleLayer(key){
   layers[key]=!layers[key];
   document.getElementById('tog-'+key).classList.toggle('on',layers[key]);
   document.getElementById('btn-'+key).classList.toggle('active',layers[key]);
+  if(key==='frt') detectedFronts=null; // force recompute on toggle
 }
 function panTo(lat,lng){vp.lat=lat+0.05;vp.lng=lng+0.25;vp.scale=Math.max(vp.scale,1.5);}
 
