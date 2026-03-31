@@ -266,17 +266,29 @@ input[type=range].rng.sst-rng::-moz-range-thumb{background:var(--hot);}
         <span class="rng-vals" id="chl-alpha-q-lbl">85%</span>
       </div>
 
-      <!-- SST -->
+      <!-- SST with multi-source picker -->
       <div class="layer-btn active" id="btn-sst" onclick="toggleSat('sst')">
         <div class="lb-left">
           <div class="lb-dot" style="background:#ff4e2a;box-shadow:0 0 5px #ff4e2a66"></div>
           <span>Sea Surface Temp</span>
         </div>
-        <span class="lb-src">MODIS/NASA</span>
+        <span class="lb-src" id="sst-src-lbl">MUR L4</span>
         <div class="tog on" id="tog-sst"></div>
       </div>
       <div class="sat-badge idle" id="sb-sst"><div class="dot"></div><span id="sl-sst">Not loaded</span></div>
-      <div class="rng-row" style="margin-top:4px">
+
+      <!-- SST source picker grid -->
+      <div id="sst-src-grid" style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:3px;margin:4px 0 2px;padding:0 2px">
+        <button class="src-btn active" id="sstsrc-mur"  onclick="setSstSource('mur')"  title="MUR L4 GHRSST · 1km · daily gap-filled · always full coverage">MUR L4</button>
+        <button class="src-btn"        id="sstsrc-n20"  onclick="setSstSource('n20')"  title="NOAA-20 VIIRS · 750m · daytime passes · NRT">N20 Day</button>
+        <button class="src-btn"        id="sstsrc-n20n" onclick="setSstSource('n20n')" title="NOAA-20 VIIRS · 750m · nighttime · cleaner signal">N20 Night</button>
+        <button class="src-btn"        id="sstsrc-n21"  onclick="setSstSource('n21')"  title="NOAA-21 VIIRS · 750m · daytime · Mar 2023–now">N21 Day</button>
+        <button class="src-btn"        id="sstsrc-snpp" onclick="setSstSource('snpp')" title="Suomi-NPP VIIRS · 750m · daytime · 2012–now">S-NPP</button>
+        <button class="src-btn"        id="sstsrc-modA" onclick="setSstSource('modA')" title="MODIS Aqua · 4km · nighttime · 2002–now">MODIS Aq</button>
+      </div>
+      <div id="sst-src-note" style="font-family:'Space Mono';font-size:7px;color:var(--muted);padding:0 2px 4px;line-height:1.6">Daily gap-filled · always full coverage ✓</div>
+
+      <div class="rng-row" style="margin-top:2px">
         <span class="rng-tag">α</span>
         <input type="range" class="rng sst-rng" id="sst-alpha-q" min="0.1" max="1" step="0.05" value="0.80" oninput="onLayerAlpha('sst-q')">
         <span class="rng-vals" id="sst-alpha-q-lbl">80%</span>
@@ -497,7 +509,7 @@ input[type=range].rng.sst-rng::-moz-range-thumb{background:var(--hot);}
     <div class="sb-sec" style="font-family:'Space Mono';font-size:8px;color:var(--muted);line-height:2">
       <div class="sb-ttl">Data Sources</div>
       Chlorophyll · NASA GIBS/VIIRS<br>
-      SST · NASA GIBS/MODIS Aqua<br>
+      SST · <span id="sst-legend-src">MUR L4 GHRSST</span><br>
       True Color · NASA GIBS/MODIS<br>
       Currents · MeteoFrance/Copernicus<br>
       Depth · NOAA Chart 11472<br>
@@ -633,6 +645,20 @@ const CHL_SOURCES = {
 };
 let activeChlSrc = 'n20'; // currently selected source
 
+// SST sources — multiple satellites, same pattern as CHL
+// MUR L4 = gap-filled composite (always has data, 1-day lag, ~1km)
+// VIIRS/MODIS L2 = raw passes (cloud gaps, near-real-time, ~750m-1km native)
+// OSTIA = UK Met Office operational analysis (smoothed, 5km, always has data)
+const SST_SOURCES = {
+  mur:   { layer:'GHRSST_L4_MUR_Sea_Surface_Temperature',           label:'MUR L4',     res:'1km',  note:'Daily gap-filled · 1-day lag · always full coverage ✓' },
+  n20:   { layer:'VIIRS_NOAA20_Sea_Surface_Temperature_Day',        label:'NOAA-20 Day', res:'750m', note:'VIIRS NOAA-20 · 750m · daytime passes · NRT' },
+  n20n:  { layer:'VIIRS_NOAA20_Sea_Surface_Temperature_Night',      label:'NOAA-20 Night',res:'750m',note:'VIIRS NOAA-20 · 750m · nighttime passes · cleaner signal' },
+  n21:   { layer:'VIIRS_NOAA21_Sea_Surface_Temperature_Day',        label:'NOAA-21 Day', res:'750m', note:'VIIRS NOAA-21 · 750m · daytime passes · NRT' },
+  snpp:  { layer:'VIIRS_SNPP_Sea_Surface_Temperature_Day',          label:'S-NPP Day',   res:'750m', note:'VIIRS Suomi-NPP · 750m · daytime passes' },
+  modA:  { layer:'MODIS_Aqua_L2_SST_Nighttime_4km_Night',          label:'MODIS Aqua',  res:'4km',  note:'MODIS Aqua · 4km · nighttime · 2002–now' },
+};
+let activeSstSrc = 'mur'; // currently selected source
+
 const GIBS_LAYERS = {
   chl: CHL_SOURCES.n20.layer,
   sst: 'GHRSST_L4_MUR_Sea_Surface_Temperature',  // MUR L4 SST, daily gap-filled (always has data)
@@ -705,6 +731,31 @@ function setChlSource(key){
   setSatStatus('chl','loading', CHL_SOURCES[key].label+' — loading...');
   if(satLayers.chl) loadSatLayer('chl').then(drawSatellite);
 }
+
+// ── SST source switcher ──
+function setSstSource(key){
+  if(!SST_SOURCES[key]) return;
+  activeSstSrc = key;
+  GIBS_LAYERS.sst = SST_SOURCES[key].layer;
+
+  // Update button states
+  Object.keys(SST_SOURCES).forEach(k=>{
+    const btn = document.getElementById('sstsrc-'+k);
+    if(btn) btn.classList.toggle('active', k===key);
+  });
+  // Update sidebar label + note
+  const lbl = document.getElementById('sst-src-lbl');
+  if(lbl) lbl.textContent = SST_SOURCES[key].label;
+  const note = document.getElementById('sst-src-note');
+  if(note) note.textContent = SST_SOURCES[key].note || '';
+
+  // Bust cache and reload
+  satCache.sst = {img:null, key:'', status:'idle'};
+  detectedFronts = null; microEddies = [];
+  setSatStatus('sst','loading', SST_SOURCES[key].label+' — loading...');
+  if(satLayers.sst) loadSatLayer('sst').then(drawSatellite);
+}
+
 // Update sidebar source label badge
 function updateChlResLabel(){
   const src = CHL_SOURCES[activeChlSrc];
