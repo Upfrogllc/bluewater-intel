@@ -1268,33 +1268,135 @@ async function loadNOAAChart(){
   document.getElementById('sl-noaa').textContent='Fetching ENC chart...';
 
   try{
-    const res = await fetch('/.netlify/functions/claude',{
-      method:'POST', headers:{'Content-Type':'application/json'},
-      body: JSON.stringify({
-        type:'noaa_chart',
-        west: b.west.toFixed(4), south: b.south.toFixed(4),
-        east: b.east.toFixed(4), north: b.north.toFixed(4),
-        width: W, height: H
-      })
-    });
-    if(!res.ok) throw new Error(`Proxy ${res.status}`);
-    const data = await res.json();
-    if(data.error) throw new Error(data.error);
-    const img = new Image();
+    // NOAA Chart Display Service WMTS — direct tile loading, no proxy needed
+    // Tile URL: https://tileservice.charts.noaa.gov/tiles/50000_1/{z}/{x}/{y}.png
+    const zoom = Math.round(Math.log2(360 / (b.east - b.west))) + 1;
+    const z = Math.max(4, Math.min(16, zoom));
+
+    // Convert geo bounds to tile coords
+    function lon2tile(lon, z){ return Math.floor((lon+180)/360*Math.pow(2,z)); }
+    function lat2tile(lat, z){ return Math.floor((1-Math.log(Math.tan(lat*Math.PI/180)+1/Math.cos(lat*Math.PI/180))/Math.PI)/2*Math.pow(2,z)); }
+
+    const txMin = lon2tile(b.west, z),  txMax = lon2tile(b.east, z);
+    const tyMin = lat2tile(b.north, z), tyMax = lat2tile(b.south, z);
+
+    // Compose a canvas from the individual tiles
+    const tileSize = 256;
+    const tilesX = txMax - txMin + 1;
+    const tilesY = tyMax - tyMin + 1;
+
+    if(tilesX > 12 || tilesY > 12) throw new Error('Zoom out to see NOAA chart');
+
+    const tileCanvas = document.createElement('canvas');
+    tileCanvas.width = tilesX * tileSize;
+    tileCanvas.height = tilesY * tileSize;
+    const tc = tileCanvas.getContext('2d');
+
+    // NOAA WMTS tile endpoints — try in order
+    const tileBases = [
+      'https://tileservice.charts.noaa.gov/tiles/50000_1',
+      'https://tileservice.charts.noaa.gov/tiles/14000_1',
+    ];
+
+    let loaded = 0, failed = 0;
+    const promises = [];
+    for(let tx = txMin; tx <= txMax; tx++){
+      for(let ty = tyMin; ty <= tyMax; ty++){
+        promises.push((async()=>{
+          for(const base of tileBases){
+            try{
+              const img = new Image();
+              img.crossOrigin = 'anonymous';
+              await new Promise((res,rej)=>{
+                img.onload = res;
+                img.onerror = rej;
+                img.src = `${base}/${z}/${tx}/${ty}.png`;
+                setTimeout(()=>rej(new Error('timeout')),8000);
+              });
+              const px = (tx - txMin) * tileSize;
+              const py = (ty - tyMin) * tileSize;
+              tc.drawImage(img, px, py, tileSize, tileSize);
+              loaded++;
+              return;
+            }catch(e){ continue; }
+          }
+          failed++;
+        })());
+      }
+    }
+    await Promise.allSettled(promises);
+
+    if(loaded === 0) throw new Error('All tiles failed to load');
+
+    // Scale tile canvas to fit our viewport canvas
+    const finalImg = new Image();
     await new Promise((resolve,reject)=>{
-      img.onload=resolve; img.onerror=reject;
-      img.src=`data:image/png;base64,${data.image}`;
-      setTimeout(()=>reject(new Error('timeout')),20000);
+      finalImg.onload = resolve;
+      finalImg.onerror = reject;
+      finalImg.src = tileCanvas.toDataURL('image/png');
     });
-    noaaChartCache = {img, key};
+
+    // Compute pixel offset to align tiles with viewport
+    function tile2lon(tx, z){ return tx/Math.pow(2,z)*360-180; }
+    function tile2lat(ty, z){ const n=Math.PI-2*Math.PI*ty/Math.pow(2,z); return 180/Math.PI*Math.atan(0.5*(Math.exp(n)-Math.exp(-n))); }
+
+    const tileWest  = tile2lon(txMin, z);
+    const tileNorth = tile2lat(tyMin, z);
+    const tileSouth = tile2lat(tyMax+1, z);
+    const tileEast  = tile2lon(txMax+1, z);
+
+    // Map tile canvas coords to viewport canvas coords
+    const [sx0, sy0] = geoToCanvas(tileNorth, tileWest);
+    const [sx1, sy1] = geoToCanvas(tileSouth, tileEast);
+    const drawW = sx1 - sx0, drawH = sy1 - sy0;
+
+    // Draw tile into viewport-sized canvas
+    const vpCanvas = document.createElement('canvas');
+    vpCanvas.width = W; vpCanvas.height = H;
+    const vc = vpCanvas.getContext('2d');
+    vc.drawImage(finalImg, sx0, sy0, drawW, drawH);
+
+    const outImg = new Image();
+    await new Promise((resolve,reject)=>{
+      outImg.onload = resolve; outImg.onerror = reject;
+      outImg.src = vpCanvas.toDataURL('image/png');
+    });
+
+    noaaChartCache = {img: outImg, key};
     if(badge) badge.className='sat-badge live';
-    document.getElementById('sl-noaa').textContent='NOAA ENC · live';
+    document.getElementById('sl-noaa').textContent=`NOAA ENC · z${z} · ${loaded} tiles`;
     drawSatellite();
   } catch(e){
-    noaaChartCache = {img:null, key:''};
-    if(badge) badge.className='sat-badge err';
-    document.getElementById('sl-noaa').textContent=`Failed: ${e.message.slice(0,35)}`;
-    console.warn('NOAA chart failed:', e.message);
+    // Fallback: try WMS proxy
+    try{
+      const res = await fetch('/.netlify/functions/claude',{
+        method:'POST', headers:{'Content-Type':'application/json'},
+        body: JSON.stringify({
+          type:'noaa_chart',
+          west: b.west.toFixed(4), south: b.south.toFixed(4),
+          east: b.east.toFixed(4), north: b.north.toFixed(4),
+          width: W, height: H
+        })
+      });
+      if(!res.ok) throw new Error(`Proxy ${res.status}`);
+      const data = await res.json();
+      if(data.error) throw new Error(data.error);
+      const img = new Image();
+      await new Promise((resolve,reject)=>{
+        img.onload=resolve; img.onerror=reject;
+        img.src=`data:image/png;base64,${data.image}`;
+        setTimeout(()=>reject(new Error('timeout')),20000);
+      });
+      noaaChartCache = {img, key};
+      if(badge) badge.className='sat-badge live';
+      document.getElementById('sl-noaa').textContent='NOAA ENC · WMS fallback';
+      drawSatellite();
+    } catch(e2){
+      noaaChartCache = {img:null, key:''};
+      if(badge) badge.className='sat-badge err';
+      document.getElementById('sl-noaa').textContent=`Failed: ${e2.message.slice(0,35)}`;
+      console.warn('NOAA chart failed:', e2.message);
+    }
   }
 }
 
