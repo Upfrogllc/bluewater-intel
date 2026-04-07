@@ -193,7 +193,8 @@ exports.handler = async (event) => {
           height: height,
           format: 'image/png',
           transparent: 'TRUE',
-          time: timeStr
+          time: timeStr,
+          elevation: payload.elevation || '0.0'
         });
         const url = `${wmsBase}?${params}`;
         try {
