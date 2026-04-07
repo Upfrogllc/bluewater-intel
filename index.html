@@ -867,8 +867,8 @@ const CHL_SOURCES = {
   pace:     { type:'gibs',        layer:'PACE_OCI_Chlorophyll_A',               label:'PACE/OCI',       res:'1km',  note:'Daily · Feb 2024–now (newest sensor)' },
   modisA:   { type:'gibs',        layer:'MODIS_Aqua_Chlorophyll_A',             label:'MODIS-Aqua',     res:'1km',  note:'Daily · 2002–now · afternoon pass ~1:30pm' },
   modisT:   { type:'gibs',        layer:'MODIS_Terra_Chlorophyll_A',            label:'MODIS-Terra',    res:'1km',  note:'Daily · 2000–now · morning pass ~10:30am' },
-  msl12nrt: { type:'coastwatch',  dataset:'noaacwNPPN20VIIRSDINEOFDaily',       variable:'chlor_a',     label:'MSL12 Gap-fill',  res:'9km',  note:'VIIRS SNPP+NOAA-20 DINEOF gap-filled · fills cloud gaps · NRT daily ⭐' },
-  msl12sq:  { type:'coastwatch',  dataset:'noaacwNPPN20S3ASCIDINEOF2kmDaily',   variable:'chlor_a',     label:'MSL12 2km SQ',    res:'2km',  note:'VIIRS+OLCI gap-filled · 2km · science quality · 2018–now ⭐' },
+  msl12nrt: { type:'coastwatch',  dataset:'noaacwNPPN20VIIRSDINEOFDaily',       variable:'chlor_a',     label:'MSL12 Gap-fill',  res:'9km',  note:'VIIRS SNPP+NOAA-20 DINEOF gap-filled · fills cloud gaps · NRT daily ⭐', elevation:'0.0' },
+  msl12sq:  { type:'coastwatch',  dataset:'noaacwNPPN20S3ASCIDINEOF2kmDaily',   variable:'chlor_a',     label:'MSL12 2km SQ',    res:'2km',  note:'VIIRS+OLCI gap-filled · 2km · science quality · 2018–now ⭐', elevation:'0.0' },
 };
 let activeChlSrc = 'n20'; // currently selected source
 
@@ -1159,11 +1159,12 @@ async function loadSatLayer(layerKey){
         body: JSON.stringify({
           type:'coastwatch',
           dataset: src.dataset,
-          variable: src.variable,
+          variable: src.variable || 'chlor_a',
           date: selectedDate,
           west: b.west.toFixed(4), south: b.south.toFixed(4),
           east: b.east.toFixed(4), north: b.north.toFixed(4),
-          width: Math.round(W), height: Math.round(H)
+          width: Math.round(W), height: Math.round(H),
+          elevation: src.elevation || '0.0'
         })
       });
       if(!res.ok) throw new Error(`Proxy ${res.status}`);
@@ -1196,32 +1197,49 @@ async function loadSatLayer(layerKey){
   if(!layerName){
     setSatStatus(layerKey,'err','No layer configured'); return;
   }
-  const url=`${GIBS}?SERVICE=WMS&VERSION=1.1.1&REQUEST=GetMap&LAYERS=${layerName}&STYLES=&FORMAT=image/png&TRANSPARENT=true&SRS=EPSG:4326&WIDTH=${Math.round(W)}&HEIGHT=${Math.round(H)}&BBOX=${b.west},${b.south},${b.east},${b.north}&TIME=${selectedDate}`;
 
-  try{
-    const img=new Image();
-    img.crossOrigin='anonymous';
-    await new Promise((resolve,reject)=>{
-      img.onload=resolve; img.onerror=reject; img.src=url;
-    });
-    satCache[layerKey]={img,key:cacheKey,status:'live'};
-    setSatStatus(layerKey,'live',`${selectedDate} · NASA GIBS`);
-    document.getElementById('date-status').textContent=selectedDate;
-  }catch(e){
+  // Try selected date then up to 3 days back (GIBS NRT has 1-2 day lag)
+  const gibsDates=[selectedDate];
+  for(let i=1;i<=3;i++){
+    const d=new Date(selectedDate+'T12:00:00Z');
+    d.setDate(d.getDate()-i);
+    gibsDates.push(d.toISOString().split('T')[0]);
+  }
+
+  let loaded=false;
+  for(const tryDate of gibsDates){
+    const url=`${GIBS}?SERVICE=WMS&VERSION=1.1.1&REQUEST=GetMap&LAYERS=${layerName}&STYLES=&FORMAT=image/png&TRANSPARENT=true&SRS=EPSG:4326&WIDTH=${Math.round(W)}&HEIGHT=${Math.round(H)}&BBOX=${b.west},${b.south},${b.east},${b.north}&TIME=${tryDate}`;
+    try{
+      const img=new Image();
+      img.crossOrigin='anonymous';
+      await new Promise((resolve,reject)=>{
+        img.onload=resolve;
+        img.onerror=reject;
+        img.src=url;
+        setTimeout(()=>reject(new Error('timeout')),12000);
+      });
+      satCache[layerKey]={img,key:cacheKey,status:'live'};
+      const srcLabel = layerKey==='chl' && CHL_SOURCES[activeChlSrc] ? CHL_SOURCES[activeChlSrc].label : 'NASA GIBS';
+      setSatStatus(layerKey,'live',`${tryDate} · ${srcLabel}`);
+      document.getElementById('date-status').textContent=tryDate;
+      loaded=true;
+      break;
+    }catch(e){ continue; }
+  }
+  if(!loaded){
+    // Final fallback — try without crossOrigin
+    const url=`${GIBS}?SERVICE=WMS&VERSION=1.1.1&REQUEST=GetMap&LAYERS=${layerName}&STYLES=&FORMAT=image/png&TRANSPARENT=true&SRS=EPSG:4326&WIDTH=${Math.round(W)}&HEIGHT=${Math.round(H)}&BBOX=${b.west},${b.south},${b.east},${b.north}&TIME=${selectedDate}`;
     try{
       const img=new Image();
       await new Promise((resolve,reject)=>{
-        img.onload=resolve;
-        img.onerror=(e2)=>reject(e2);
-        img.src=url;
+        img.onload=resolve; img.onerror=reject; img.src=url;
         setTimeout(()=>reject(new Error('timeout')),15000);
       });
       satCache[layerKey]={img,key:cacheKey,status:'live',tainted:true};
       setSatStatus(layerKey,'live',`${selectedDate} · NASA GIBS`);
     }catch(e2){
       satCache[layerKey]={img:null,key:'',status:'err'};
-      setSatStatus(layerKey,'err',`Failed — try different date`);
-      console.warn('GIBS load failed for',layerKey,e2.message);
+      setSatStatus(layerKey,'err',`No data — cloud cover or processing lag`);
     }
   }
 }
