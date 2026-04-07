@@ -1,4 +1,3 @@
-
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -455,7 +454,7 @@ input[type=range].rng.sst-rng::-moz-range-thumb{background:var(--hot);}
           <span>Chlorophyll-a</span>
         </div>
         <span class="lb-src" id="chl-src-lbl">NOAA-20</span>
-        <div class="tog on" id="tog-chl"></div>
+        <div class="tog" id="tog-chl"></div>
       </div>
       <div class="sat-badge idle" id="sb-chl"><div class="dot"></div><span id="sl-chl">Not loaded</span></div>
 
@@ -488,7 +487,7 @@ input[type=range].rng.sst-rng::-moz-range-thumb{background:var(--hot);}
           <span>Sea Surface Temp</span>
         </div>
         <span class="lb-src" id="sst-src-lbl">MUR L4</span>
-        <div class="tog on" id="tog-sst"></div>
+        <div class="tog" id="tog-sst"></div>
       </div>
       <div class="sat-badge idle" id="sb-sst"><div class="dot"></div><span id="sl-sst">Not loaded</span></div>
 
@@ -525,16 +524,16 @@ input[type=range].rng.sst-rng::-moz-range-thumb{background:var(--hot);}
         <span class="rng-vals" id="tc-alpha-q-lbl">100%</span>
       </div>
 
-      <!-- NOAA Chart -->
-      <div class="layer-btn" id="btn-noaa" onclick="toggleNoaaChart()">
+      <!-- NOAA Chart — always on -->
+      <div class="layer-btn" style="cursor:default">
         <div class="lb-left">
           <div class="lb-dot" style="background:#aac8ff;box-shadow:0 0 5px #aac8ff66"></div>
           <span>NOAA Nav Chart</span>
         </div>
         <span class="lb-src">ENC</span>
-        <div class="tog" id="tog-noaa"></div>
+        <span style="font-size:8px;color:var(--teal);font-family:'Space Mono'">ALWAYS ON</span>
       </div>
-      <div class="sat-badge idle" id="sb-noaa"><div class="dot"></div><span id="sl-noaa">Not loaded</span></div>
+      <div class="sat-badge idle" id="sb-noaa"><div class="dot"></div><span id="sl-noaa">Loading...</span></div>
       <div class="rng-row" style="margin-top:4px">
         <span class="rng-tag">α</span>
         <input type="range" class="rng" id="noaa-alpha" min="0.1" max="1" step="0.05" value="1" oninput="onLayerAlpha('noaa')">
@@ -551,7 +550,7 @@ input[type=range].rng.sst-rng::-moz-range-thumb{background:var(--hot);}
           <span>★ Live Currents</span>
         </div>
         <span class="lb-src">CMEMS</span>
-        <div class="tog on" id="tog-cur"></div>
+        <div class="tog" id="tog-cur"></div>
       </div>
 
       <div class="layer-btn active" id="btn-edy" onclick="toggleLayer('edy')">
@@ -560,7 +559,7 @@ input[type=range].rng.sst-rng::-moz-range-thumb{background:var(--hot);}
           <span>Eddies</span>
         </div>
         <span class="lb-src">Computed</span>
-        <div class="tog on" id="tog-edy"></div>
+        <div class="tog" id="tog-edy"></div>
       </div>
 
 
@@ -570,7 +569,7 @@ input[type=range].rng.sst-rng::-moz-range-thumb{background:var(--hot);}
           <span>Micro-Eddies &lt;5mi</span>
         </div>
         <span class="lb-src">Sat</span>
-        <div class="tog on" id="tog-me"></div>
+        <div class="tog" id="tog-me"></div>
       </div>
 
       <div class="layer-btn active" id="btn-frt" onclick="toggleLayer('frt')">
@@ -579,7 +578,7 @@ input[type=range].rng.sst-rng::-moz-range-thumb{background:var(--hot);}
           <span>SST &amp; Chl Fronts</span>
         </div>
         <span class="lb-src">Computed</span>
-        <div class="tog on" id="tog-frt"></div>
+        <div class="tog" id="tog-frt"></div>
       </div>
       <div style="padding:4px 10px 6px;font-family:'Space Mono';font-size:8px;color:var(--muted);line-height:1.6">
         <span style="color:#ff88ff">━</span> SST front &nbsp;
@@ -914,9 +913,9 @@ let bgCache=null, bgCacheKey='', contourCache=null, contourCacheKey='';
 // Satellite image cache per layer
 const satCache = {chl:{img:null,key:'',status:'idle'}, sst:{img:null,key:'',status:'idle'}, tc:{img:null,key:'',status:'idle'}};
 const satLayers = {chl:true, sst:true, tc:false};
-let noaaChartOn = false;
+let noaaChartOn = true; // always on
 let noaaChartCache = {img:null, key:''};
-const layers    = {cur:true, edy:true, frt:true, me:true};
+const layers    = {cur:false, edy:false, frt:false, me:false}; // all off at startup
 
 // Date state — default to yesterday (most recent satellite data with processing lag)
 // NOAA-20/21 are available within ~3hrs of overpass but we default to yesterday for safety
@@ -1258,7 +1257,6 @@ async function loadAllSatellite(){
 }
 
 async function loadNOAAChart(){
-  if(!noaaChartOn) return;
   const b = getViewBounds();
   const W = Math.round(satCvs.width), H = Math.round(satCvs.height);
   const key = `noaa_${b.west.toFixed(3)}_${b.south.toFixed(3)}_${b.east.toFixed(3)}_${b.north.toFixed(3)}_${W}_${H}`;
@@ -1404,17 +1402,7 @@ async function loadNOAAChart(){
   }
 }
 
-function toggleNoaaChart(){
-  noaaChartOn = !noaaChartOn;
-  document.getElementById('tog-noaa').classList.toggle('on', noaaChartOn);
-  document.getElementById('btn-noaa').classList.toggle('active', noaaChartOn);
-  if(noaaChartOn){
-    loadNOAAChart();
-  } else {
-    noaaChartCache = {img:null, key:''};
-    drawSatellite();
-  }
-}
+
 
 // Apply gamma + range remapping to a canvas image
 // gamma < 1 = compress highlights / boost darks; gamma > 1 = stretch highlights
@@ -2412,7 +2400,8 @@ function loop(ts){
         noaaChartCache._lastBounds=nb;
       }
       drawSatellite();
-      loadAllSatellite();
+      // Only reload sat if user has them active
+      if(satLayers.chl||satLayers.sst||satLayers.tc) loadAllSatellite();
       if(noaaChartOn && !noaaChartCache.img) loadNOAAChart();
     }
   }
@@ -2623,7 +2612,7 @@ function updateStats(){
 }
 
 async function fetchAllData(){
-  await Promise.all([fetchCurrentData(), loadAllSatellite(), fetchWeather()]);
+  await Promise.all([fetchCurrentData(), loadAllSatellite(), fetchWeather(), loadNOAAChart()]);
 }
 
 // ═══════════════════════════════════════════
@@ -2944,6 +2933,8 @@ function toggleSat(key){
 }
 function toggleLayer(key){
   layers[key]=!layers[key];
+  // Fetch data on first activation
+  if(layers[key] && key==='cur' && !currentGrid.length) fetchCurrentData();
   document.getElementById('tog-'+key).classList.toggle('on',layers[key]);
   document.getElementById('btn-'+key).classList.toggle('active',layers[key]);
   if(key==='frt') detectedFronts=null;
@@ -3636,10 +3627,8 @@ function drawWaveChart(waveH, swellH, times){
 window.addEventListener('load',()=>{
   initSpeciesUI();
   updateAnalyzeBtn();
-  setTimeout(()=>{
-    fetchCurrentData();
-    loadAllSatellite();
-  }, 500);
+  // Only load the nav chart on startup — everything else is user-triggered
+  setTimeout(()=>{ loadNOAAChart(); }, 300);
 });
 
 // ═══════════════════════════════════════════
