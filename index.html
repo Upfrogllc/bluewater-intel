@@ -635,6 +635,27 @@ input[type=range].rng.sst-rng::-moz-range-thumb{background:var(--hot);}
 
     <div class="sb-sec">
       <div class="sb-ttl" style="margin-bottom:7px">Live Currents</div>
+
+      <!-- Pin drop instruction -->
+      <div id="pin-instruction" style="font-family:'Space Mono';font-size:8px;color:var(--warm);background:#f5a62312;border:1px solid #f5a62344;border-radius:5px;padding:6px 8px;margin-bottom:7px;line-height:1.6">
+        📍 <strong>Click map to drop analysis pin</strong><br>
+        <span style="color:var(--muted)">Currents fetch within radius only</span>
+      </div>
+
+      <!-- Pin status + clear -->
+      <div id="pin-status" style="display:none;margin-bottom:7px">
+        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:5px">
+          <span style="font-family:'Space Mono';font-size:8px;color:var(--teal)" id="pin-coords">—</span>
+          <button onclick="clearAnalysisPin()" style="font-family:'Space Mono';font-size:8px;color:var(--muted);background:transparent;border:1px solid var(--border);border-radius:3px;padding:2px 6px;cursor:pointer">✕ Clear</button>
+        </div>
+        <div style="display:flex;align-items:center;gap:6px">
+          <span style="font-family:'Space Mono';font-size:8px;color:var(--muted);white-space:nowrap">Radius</span>
+          <input type="range" class="rng" id="pin-radius" min="10" max="150" step="5" value="50" oninput="onPinRadiusChange()">
+          <span class="rng-vals" id="pin-radius-lbl" style="white-space:nowrap">50mi</span>
+        </div>
+        <button onclick="fetchCurrentData()" style="width:100%;margin-top:6px;padding:5px;border-radius:4px;border:1px solid var(--teal);background:var(--teal2);color:var(--teal);font-family:'Space Mono';font-size:8px;cursor:pointer">⟳ Fetch Currents in Radius</button>
+      </div>
+
       <div style="display:flex;flex-wrap:wrap;gap:3px;margin-bottom:7px" id="cur-src-btns">
         <button class="src-btn active" id="cursrc-openmeteo"  onclick="setCurSource('openmeteo')">Open-Meteo</button>
         <button class="src-btn"        id="cursrc-oscar"      onclick="setCurSource('oscar')">OSCAR NRT</button>
@@ -1107,6 +1128,9 @@ function initLeafletMap() {
       openSpotPopup(lat, lng, e.containerPoint.x, e.containerPoint.y);
     } else if (mapMode === 'measure') {
       handleMeasureClick(lat, lng);
+    } else {
+      // Default pan mode — drop analysis pin
+      dropAnalysisPin(lat, lng);
     }
   });
 
@@ -1654,7 +1678,13 @@ function toggleSat(key) {
 
 function toggleLayer(key) {
   layers[key] = !layers[key];
-  if (layers[key] && key === 'cur' && !currentGrid.length) fetchCurrentData();
+  if (layers[key] && key === 'cur' && !currentGrid.length) {
+    if (!analysisPin) {
+      setDS('idle', 'Drop a pin on the map to fetch currents');
+    } else {
+      fetchCurrentData();
+    }
+  }
   if (layers[key] && key === 'me') {
     const hasCurData = currentGrid.length >= 6;
     const hasSatData = (satLayers.chl && satCache.chl.img) || (satLayers.sst && satCache.sst.img);
@@ -3038,14 +3068,105 @@ function setDS(state,msg){
 }
 function setFill(p){document.getElementById('ds-fill').style.width=p+'%';}
 
-// Build a dynamic grid from current viewport bounds
+// ═══════════════════════════════════════════
+// ANALYSIS PIN — drop to set search center
+// ═══════════════════════════════════════════
+let analysisPin = null;      // { lat, lng }
+let analysisPinMarker = null; // Leaflet marker
+let analysisPinCircle = null; // Leaflet circle overlay
+
+function dropAnalysisPin(lat, lng) {
+  analysisPin = { lat, lng };
+
+  // Remove old marker and circle
+  if (analysisPinMarker) map.removeLayer(analysisPinMarker);
+  if (analysisPinCircle) map.removeLayer(analysisPinCircle);
+
+  const radiusMi = parseInt(document.getElementById('pin-radius')?.value || 50);
+  const radiusM  = radiusMi * 1609.34;
+
+  // Glowing pin marker
+  const icon = L.divIcon({
+    className: '',
+    iconSize: [24, 24],
+    iconAnchor: [12, 24],
+    html: `<div style="width:18px;height:18px;border-radius:50% 50% 50% 0;background:var(--warm);border:2px solid #fff;transform:rotate(-45deg);box-shadow:0 0 12px #f5a62366;margin:3px"></div>`
+  });
+  analysisPinMarker = L.marker([lat, lng], { icon, zIndexOffset: 1000 }).addTo(map);
+  analysisPinMarker.bindTooltip(`📍 ${lat.toFixed(4)}°N ${Math.abs(lng).toFixed(4)}°W · ${radiusMi}mi radius`, { permanent: false });
+
+  // Radius circle
+  analysisPinCircle = L.circle([lat, lng], {
+    radius: radiusM,
+    color: '#f5a623',
+    fillColor: '#f5a623',
+    fillOpacity: 0.06,
+    weight: 1.5,
+    dashArray: '6 4',
+    interactive: false
+  }).addTo(map);
+
+  // Update sidebar
+  document.getElementById('pin-instruction').style.display = 'none';
+  document.getElementById('pin-status').style.display = 'block';
+  document.getElementById('pin-coords').textContent = `${lat.toFixed(4)}°N  ${Math.abs(lng).toFixed(4)}°W`;
+}
+
+function clearAnalysisPin() {
+  analysisPin = null;
+  if (analysisPinMarker) { map.removeLayer(analysisPinMarker); analysisPinMarker = null; }
+  if (analysisPinCircle) { map.removeLayer(analysisPinCircle); analysisPinCircle = null; }
+  document.getElementById('pin-instruction').style.display = 'block';
+  document.getElementById('pin-status').style.display = 'none';
+  currentGrid = [];
+  document.getElementById('cur-readings').innerHTML = '';
+  setDS('idle', 'Not loaded');
+}
+
+function onPinRadiusChange() {
+  const radiusMi = parseInt(document.getElementById('pin-radius').value);
+  document.getElementById('pin-radius-lbl').textContent = radiusMi + 'mi';
+  if (!analysisPin) return;
+  // Update circle radius live
+  if (analysisPinCircle) analysisPinCircle.setRadius(radiusMi * 1609.34);
+  if (analysisPinMarker) {
+    analysisPinMarker.setTooltipContent(`📍 ${analysisPin.lat.toFixed(4)}°N ${Math.abs(analysisPin.lng).toFixed(4)}°W · ${radiusMi}mi radius`);
+  }
+}
+
+// Build a grid of points within the pin radius
+function buildPinGrid(spacing) {
+  if (!analysisPin) return buildViewportGrid(spacing); // fallback if no pin
+
+  const { lat: cLat, lng: cLng } = analysisPin;
+  const radiusMi = parseInt(document.getElementById('pin-radius')?.value || 50);
+
+  // Convert radius to degrees (approximate)
+  const dLat = radiusMi / 69.0;
+  const dLng = radiusMi / (69.0 * Math.cos(cLat * Math.PI / 180));
+
+  const pts = [];
+  for (let la = cLat - dLat; la <= cLat + dLat; la += spacing) {
+    for (let ln = cLng - dLng; ln <= cLng + dLng; ln += spacing) {
+      // Only include points within the circle
+      const distMi = Math.sqrt(
+        Math.pow((la - cLat) * 69, 2) +
+        Math.pow((ln - cLng) * 69 * Math.cos(cLat * Math.PI / 180), 2)
+      );
+      if (distMi <= radiusMi) {
+        pts.push([parseFloat(la.toFixed(4)), parseFloat(ln.toFixed(4))]);
+      }
+    }
+  }
+  return pts;
+}
+
+// Build a dynamic grid from current viewport bounds (fallback when no pin)
 function buildViewportGrid(spacing) {
   const b = getViewBounds();
   const pts = [];
-  const latStep = spacing;
-  const lngStep = spacing;
-  for (let la = b.south + latStep/2; la < b.north; la += latStep) {
-    for (let ln = b.west + lngStep/2; ln < b.east; ln += lngStep) {
+  for (let la = b.south + spacing/2; la < b.north; la += spacing) {
+    for (let ln = b.west + spacing/2; ln < b.east; ln += spacing) {
       pts.push([parseFloat(la.toFixed(4)), parseFloat(ln.toFixed(4))]);
     }
   }
@@ -3127,14 +3248,18 @@ async function fetchCurrents_CMEMS(pts, dataset) {
 }
 
 async function fetchCurrentData() {
+  if (!analysisPin) {
+    setDS('err', 'Drop a pin on the map first');
+    return;
+  }
   setDS('loading', `Loading ${CUR_SOURCES[activeCurSrc].label}...`); setFill(0);
   currentGrid = []; document.getElementById('cur-readings').innerHTML = '';
 
-  // Build viewport grid — tighter spacing = more data points for interpolation
+  // Build pin-radius grid — tight circle around the dropped pin
   const spacing = activeCurSrc === 'openmeteo' ? 0.10 :
                   activeCurSrc === 'oscar'      ? 0.15 :
                   activeCurSrc === 'cmems'      ? 0.08 : 0.10;
-  const pts = buildViewportGrid(spacing);
+  const pts = buildPinGrid(spacing);
 
   if (!pts.length) { setDS('err', 'No points in view'); return; }
 
@@ -3429,6 +3554,19 @@ function onPortSelect(){
 }
 
 function getSearchBounds(){
+  // If a pin is dropped, always use the pin radius as the search area
+  if (analysisPin) {
+    const radiusMi = parseInt(document.getElementById('pin-radius')?.value || 50);
+    const { lat: clat, lng: clng } = analysisPin;
+    const dLat = radiusMi / 69;
+    const dLng = radiusMi / (69 * Math.cos(clat * Math.PI / 180));
+    return {
+      south: clat - dLat, north: clat + dLat,
+      west:  clng - dLng, east:  clng + dLng,
+      centerLat: clat, centerLng: clng,
+      radiusMi, label: `within ${radiusMi}mi of pinned location (${clat.toFixed(3)}°N, ${Math.abs(clng).toFixed(3)}°W)`
+    };
+  }
   // Returns {south, north, west, east, centerLat, centerLng, radiusMi, label}
   if(searchMode === 'viewport'){
     const b = getViewBounds();
