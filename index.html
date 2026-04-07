@@ -1559,6 +1559,10 @@ function toggleSat(key) {
 function toggleLayer(key) {
   layers[key] = !layers[key];
   if (layers[key] && key === 'cur' && !currentGrid.length) fetchCurrentData();
+  if (layers[key] && key === 'me') {
+    microEddies = detectMicroEddies();
+    updateMicroEddySidebar();
+  }
   document.getElementById('tog-'+key).classList.toggle('on', layers[key]);
   document.getElementById('btn-'+key).classList.toggle('active', layers[key]);
   if (!layers[key]) {
