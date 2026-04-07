@@ -1255,77 +1255,94 @@ function animateCurrents() {
 
 function drawCurrentOverlay() {
   if (!map || !currentCanvas || !currentCtx) return;
-
   const W = currentCanvas.width, H = currentCanvas.height;
   currentCtx.clearRect(0, 0, W, H);
 
-  if (!layers.cur || !currentGrid.length) return;
-
-  // Dense interpolated grid — one arrow every 28px
-  // Uses interpCurrentAt (IDW) to estimate current at any point between data
-  const SPACING = 28;
-
-  for (let x = SPACING / 2; x < W; x += SPACING) {
-    for (let y = SPACING / 2; y < H; y += SPACING) {
-
-      // Convert screen pixel to geo using Leaflet
-      const latlng = map.containerPointToLatLng([x, y]);
-      const lat = latlng.lat, lng = latlng.lng;
-
-      // Skip land (rough bounding box for Florida east coast offshore)
-      // Coastline is ~80.1W to 80.4W depending on lat — skip anything west of that
-      const coastLng = -80.5 + (lat - 25) * 0.04; // approximate shoreline
-      if (lng < coastLng) continue;
-      if (lat < 24 || lat > 32 || lng < -82 || lng > -78) continue;
-
-      // Interpolate current at this geo point
-      const cur = interpCurrentAt(lat, lng);
-      if (!cur || cur.speed_kt < 0.01) continue;
-
-      const s   = Math.min(1, cur.speed_kt / 2.0);
-      const len = Math.min(22, 5 + cur.speed_kt * 8);
-      const ar  = cur.dir_deg * Math.PI / 180;
-      const dx  = Math.sin(ar) * len;
-      const dy  = -Math.cos(ar) * len;
-
-      // Animated flow offset
-      const phase = (animT * 0.6 + lat * 4.1 + lng * 3.3) % 1;
-      const ox = dx * phase * 0.25;
-      const oy = dy * phase * 0.25;
-
-      // Color: deep blue (slow) → cyan → white (fast)
-      const r  = Math.round(40  + s * 215);
-      const g2 = Math.round(160 + s * 95);
-      const bl = Math.round(255);
-      const alpha = 0.45 + s * 0.5;
-      const col = `rgba(${r},${g2},${bl},${alpha})`;
-      const lw  = 0.8 + s * 1.0;
-
-      currentCtx.strokeStyle = col;
-      currentCtx.lineWidth   = lw;
-      currentCtx.lineCap     = 'round';
-
-      // Shaft
-      currentCtx.beginPath();
-      currentCtx.moveTo(x + ox,      y + oy);
-      currentCtx.lineTo(x + ox + dx, y + oy + dy);
-      currentCtx.stroke();
-
-      // Arrowhead
-      const ha  = Math.atan2(-dy, -dx);
-      const hl  = 4 + s * 3;
-      const tx  = x + ox + dx;
-      const ty  = y + oy + dy;
-      currentCtx.beginPath();
-      currentCtx.moveTo(tx, ty);
-      currentCtx.lineTo(tx + hl * Math.cos(ha + 0.5), ty + hl * Math.sin(ha + 0.5));
-      currentCtx.moveTo(tx, ty);
-      currentCtx.lineTo(tx + hl * Math.cos(ha - 0.5), ty + hl * Math.sin(ha - 0.5));
-      currentCtx.stroke();
+  if (layers.cur && currentGrid.length) {
+    const SPACING = 28;
+    for (let x = SPACING / 2; x < W; x += SPACING) {
+      for (let y = SPACING / 2; y < H; y += SPACING) {
+        const latlng = map.containerPointToLatLng([x, y]);
+        const lat = latlng.lat, lng = latlng.lng;
+        const coastLng = -80.5 + (lat - 25) * 0.04;
+        if (lng < coastLng) continue;
+        if (lat < 24 || lat > 32 || lng < -82 || lng > -78) continue;
+        const cur = interpCurrentAt(lat, lng);
+        if (!cur || cur.speed_kt < 0.01) continue;
+        const s   = Math.min(1, cur.speed_kt / 2.0);
+        const len = Math.min(22, 5 + cur.speed_kt * 8);
+        const ar  = cur.dir_deg * Math.PI / 180;
+        const dx  = Math.sin(ar) * len;
+        const dy  = -Math.cos(ar) * len;
+        const phase = (animT * 0.6 + lat * 4.1 + lng * 3.3) % 1;
+        const ox = dx * phase * 0.25;
+        const oy = dy * phase * 0.25;
+        const r  = Math.round(40  + s * 215);
+        const g2 = Math.round(160 + s * 95);
+        const bl = Math.round(255);
+        const alpha = 0.45 + s * 0.5;
+        const col = `rgba(${r},${g2},${bl},${alpha})`;
+        const lw  = 0.8 + s * 1.0;
+        currentCtx.strokeStyle = col;
+        currentCtx.lineWidth   = lw;
+        currentCtx.lineCap     = 'round';
+        currentCtx.beginPath();
+        currentCtx.moveTo(x + ox, y + oy);
+        currentCtx.lineTo(x + ox + dx, y + oy + dy);
+        currentCtx.stroke();
+        const ha  = Math.atan2(-dy, -dx);
+        const hl  = 4 + s * 3;
+        const tx  = x + ox + dx;
+        const ty  = y + oy + dy;
+        currentCtx.beginPath();
+        currentCtx.moveTo(tx, ty);
+        currentCtx.lineTo(tx + hl * Math.cos(ha + 0.5), ty + hl * Math.sin(ha + 0.5));
+        currentCtx.moveTo(tx, ty);
+        currentCtx.lineTo(tx + hl * Math.cos(ha - 0.5), ty + hl * Math.sin(ha - 0.5));
+        currentCtx.stroke();
+      }
     }
   }
-}
 
+  if (layers.me && microEddies.length) {
+    microEddies.forEach(me => {
+      const pt = map.latLngToContainerPoint([me.lat, me.lng]);
+      const pt2 = map.latLngToContainerPoint([me.lat + me.radiusDeg, me.lng]);
+      const radiusPx = Math.abs(pt2.y - pt.y);
+      if (radiusPx < 3) return;
+      const col = me.sense === 'CCW' ? '#00ccff' : '#ff6600';
+      const conf = me.source === 'both' ? 1.0 : me.source === 'current' ? 0.7 : 0.5;
+      currentCtx.save();
+      currentCtx.translate(pt.x, pt.y);
+      currentCtx.rotate(me.sense === 'CCW' ? -animT * 0.5 : animT * 0.5);
+      currentCtx.beginPath();
+      currentCtx.arc(0, 0, radiusPx, 0, Math.PI * 2);
+      currentCtx.strokeStyle = col;
+      currentCtx.lineWidth = 1.5 + conf;
+      currentCtx.globalAlpha = 0.4 + conf * 0.4;
+      currentCtx.setLineDash([6, 4]);
+      currentCtx.stroke();
+      currentCtx.setLineDash([]);
+      currentCtx.restore();
+      currentCtx.beginPath();
+      currentCtx.arc(pt.x, pt.y, 3, 0, Math.PI * 2);
+      currentCtx.fillStyle = col;
+      currentCtx.globalAlpha = 0.8;
+      currentCtx.fill();
+      currentCtx.globalAlpha = 0.9;
+      currentCtx.font = '9px "Bebas Neue", sans-serif';
+      currentCtx.fillStyle = col;
+      currentCtx.textAlign = 'center';
+      currentCtx.fillText((me.sense === 'CCW' ? '\u21BA' : '\u21BB') + ' ' + me.radiusMi.toFixed(1) + 'mi', pt.x, pt.y - radiusPx - 6);
+      if (me.source === 'both') {
+        currentCtx.font = '7px "Space Mono", monospace';
+        currentCtx.fillStyle = '#5dffaa';
+        currentCtx.fillText('\u25CF', pt.x, pt.y - radiusPx - 15);
+      }
+      currentCtx.globalAlpha = 1.0;
+    });
+  }
+}
 
 function drawEddyOverlay() {
   if (!map || !detectedEddies.length) return;
