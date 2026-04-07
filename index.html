@@ -655,12 +655,12 @@ input[type=range].rng.sst-rng::-moz-range-thumb{background:var(--hot);}
       </div>
       <div class="rng-row">
         <span class="rng-tag">sens</span>
-        <input type="range" class="rng" id="me-sens" min="1" max="10" step="0.5" value="3.5" oninput="document.getElementById('me-sens-lbl').textContent=parseFloat(this.value).toFixed(1);microEddies=[];detectedFronts=null;">
+        <input type="range" class="rng" id="me-sens" min="1" max="10" step="0.5" value="3.5" oninput="document.getElementById('me-sens-lbl').textContent=parseFloat(this.value).toFixed(1);microEddies=[];detectedFronts=null;if(layers.me){microEddies=detectMicroEddies();updateMicroEddySidebar();}">
         <span class="rng-vals" id="me-sens-lbl">3.5</span>
       </div>
       <div class="rng-row">
         <span class="rng-tag">size</span>
-        <input type="range" class="rng" id="me-maxr" min="4" max="40" step="2" value="14" oninput="document.getElementById('me-maxr-lbl').textContent=Math.round(this.value*0.3)+'mi';microEddies=[];">
+        <input type="range" class="rng" id="me-maxr" min="4" max="40" step="2" value="14" oninput="document.getElementById('me-maxr-lbl').textContent=Math.round(this.value*0.3)+'mi';microEddies=[];if(layers.me){microEddies=detectMicroEddies();updateMicroEddySidebar();}">
         <span class="rng-vals" id="me-maxr-lbl">4mi</span>
       </div>
       <div id="me-list" style="margin-top:6px;font-size:9px;color:var(--muted);font-family:'Space Mono'">Load satellite data to detect</div>
@@ -2253,169 +2253,441 @@ function detectEddies(){
   updateEddySidebar();
 }
 
-// ═══════════════════════════════════════════
-// MICRO-EDDY DETECTION — satellite pixel curl
-// Finds tight circular gradient patterns <5mi
-// ═══════════════════════════════════════════
-
 function detectMicroEddies(){
-  const mapEl2=document.getElementById("mapwrap"); const W = mapEl2?mapEl2.clientWidth:800, H = mapEl2?mapEl2.clientHeight:600;
-  if(!W || !H) return [];
-
+  // ═══════════════════════════════════════════════════════════════
+  // HYBRID MICRO-EDDY DETECTION
+  // Combines two independent methods:
+  //   1. Current vector curl analysis (raw u/v data — most reliable)
+  //   2. Satellite gradient analysis (pixel-based — visual confirmation)
+  // Features found by BOTH methods get boosted confidence.
+  // Works with currents alone, satellite alone, or both together.
+  // ═══════════════════════════════════════════════════════════════
+ 
+  const mapEl2 = document.getElementById("mapwrap");
+  const W = mapEl2 ? mapEl2.clientWidth : 800;
+  const H = mapEl2 ? mapEl2.clientHeight : 600;
+  if (!W || !H) return [];
+ 
   const sens   = parseFloat(document.getElementById('me-sens')?.value || '3.5');
   const maxRpx = parseFloat(document.getElementById('me-maxr')?.value || '14');
-
-  // Pick best available image: chl preferred (sharper gradients), fallback sst
+  const maxRadiusMi = Math.round(maxRpx * 0.3);
+ 
+  // We'll collect candidates from both methods then merge
+  const allCandidates = [];
+ 
+  // ─────────────────────────────────────────────────────────────
+  // METHOD 1: CURRENT VECTOR CURL ANALYSIS
+  // Uses raw u/v current data to compute vorticity (rotation).
+  // This is the most physically meaningful detection method.
+  // ─────────────────────────────────────────────────────────────
+  if (currentGrid.length >= 6) {
+    const DEG_TO_KM = 111.0;
+    // We need finer resolution than the big eddy detector
+    // Scan all current grid points for local curl
+    const curlGrid = [];
+ 
+    for (let i = 0; i < currentGrid.length; i++) {
+      const p = currentGrid[i];
+ 
+      // Find neighbors in 4 directions — tighter radius than big eddy detector
+      const right = currentGrid.find(q => Math.abs(q.lat - p.lat) < 0.03 && q.lng > p.lng && Math.abs(q.lng - p.lng) < 0.2);
+      const left  = currentGrid.find(q => Math.abs(q.lat - p.lat) < 0.03 && q.lng < p.lng && Math.abs(q.lng - p.lng) < 0.2);
+      const up    = currentGrid.find(q => Math.abs(q.lng - p.lng) < 0.08 && q.lat > p.lat && Math.abs(q.lat - p.lat) < 0.15);
+      const down  = currentGrid.find(q => Math.abs(q.lng - p.lng) < 0.08 && q.lat < p.lat && Math.abs(q.lat - p.lat) < 0.15);
+ 
+      if (!right || !left || !up || !down) continue;
+ 
+      const dx = (right.lng - left.lng) * DEG_TO_KM * Math.cos(p.lat * Math.PI / 180);
+      const dy = (up.lat - down.lat) * DEG_TO_KM;
+      if (dx < 0.5 || dy < 0.5) continue;
+ 
+      // Vorticity = dV/dx - dU/dy
+      const dVdx = (right.v - left.v) / dx;
+      const dUdy = (up.u - down.u) / dy;
+      const curl = dVdx - dUdy;
+ 
+      // Divergence — eddies should have low divergence
+      const div = ((right.u - left.u) / dx) + ((up.v - down.v) / dy);
+ 
+      const curlMag = Math.abs(curl);
+ 
+      // Lower threshold than big eddy detector — we want small features
+      // Scale threshold by sensitivity: lower sens = more detections
+      const curlThresh = 0.004 * (11 - sens); // sens 1 → 0.04, sens 10 → 0.004
+ 
+      if (curlMag > curlThresh && Math.abs(div) < curlMag * 2.0) {
+        curlGrid.push({
+          lat: p.lat, lng: p.lng,
+          curl, curlMag, div,
+          speed_kt: p.speed_kt,
+          source: 'current'
+        });
+      }
+    }
+ 
+    // Cluster nearby curl points into eddy candidates
+    const used = new Set();
+    for (let i = 0; i < curlGrid.length; i++) {
+      if (used.has(i)) continue;
+      const cluster = [curlGrid[i]];
+      for (let j = i + 1; j < curlGrid.length; j++) {
+        if (used.has(j)) continue;
+        const dist = Math.hypot(curlGrid[j].lat - curlGrid[i].lat, curlGrid[j].lng - curlGrid[i].lng);
+        // Only cluster very nearby points — we want small eddies
+        const maxClusterDeg = maxRadiusMi / 69 * 2;
+        if (dist < maxClusterDeg) {
+          cluster.push(curlGrid[j]);
+          used.add(j);
+        }
+      }
+      used.add(i);
+ 
+      const lat = cluster.reduce((s, p) => s + p.lat, 0) / cluster.length;
+      const lng = cluster.reduce((s, p) => s + p.lng, 0) / cluster.length;
+      const curl = cluster.reduce((s, p) => s + p.curl, 0) / cluster.length;
+ 
+      // Skip if on land (west of approximate coastline)
+      const coastLng = -80.5 + (lat - 25) * 0.04;
+      if (lng < coastLng) continue;
+ 
+      // Estimate radius from cluster spread
+      const maxDist = Math.max(0.01, ...cluster.map(p => Math.hypot(p.lat - lat, p.lng - lng)));
+      const radiusDeg = Math.min(maxRadiusMi / 69, maxDist * 1.5);
+      const radiusMi = radiusDeg * 69;
+ 
+      if (radiusMi > maxRadiusMi) continue;
+      if (radiusMi < 0.3) continue;
+ 
+      const sense = curl > 0 ? 'CCW' : 'CW';
+      const strength = Math.min(1, Math.abs(curl) / 0.05);
+ 
+      allCandidates.push({
+        lat, lng, radiusDeg, radiusMi, sense, strength,
+        score: Math.abs(curl) * 1000 * cluster.length,
+        source: 'current',
+        curlVal: curl
+      });
+    }
+  }
+ 
+  // ─────────────────────────────────────────────────────────────
+  // METHOD 2: SATELLITE GRADIENT ANALYSIS (original pixel method)
+  // Uses satellite imagery to find circular color gradient patterns.
+  // Works with either CHL or SST — whichever is loaded.
+  // ─────────────────────────────────────────────────────────────
   let srcImg = null;
-  if(satLayers.chl && satCache.chl.img) srcImg = satCache.chl.img;
-  else if(satLayers.sst && satCache.sst.img) srcImg = satCache.sst.img;
-  if(!srcImg) return [];
-
-  // Render to offscreen canvas
-  const tmp = document.createElement('canvas');
-  tmp.width = W; tmp.height = H;
-  const tc = tmp.getContext('2d');
-  tc.drawImage(srcImg, 0, 0, W, H);
-
-  let px;
-  try { px = tc.getImageData(0, 0, W, H).data; }
-  catch(e){ return []; }
-
-  // Build luminance + valid mask
-  const lum  = new Float32Array(W*H);
-  const valid = new Uint8Array(W*H);
-  for(let i=0;i<W*H;i++){
-    const b=i*4;
-    if(px[b+3]<10){ lum[i]=0; valid[i]=0; continue; }
-    lum[i] = px[b]*0.299 + px[b+1]*0.587 + px[b+2]*0.114;
-    valid[i]=1;
-  }
-
-  // Compute Sobel gradients at step resolution
-  const step=2;
-  const gx=new Float32Array(W*H);
-  const gy=new Float32Array(W*H);
-  for(let y=step;y<H-step;y+=1){
-    for(let x=step;x<W-step;x+=1){
-      if(!valid[y*W+x]) continue;
-      const l=(r,c)=>valid[r*W+c]?lum[r*W+c]:lum[y*W+x];
-      gx[y*W+x] = -l(y-step,x-step)+l(y-step,x+step) -2*l(y,x-step)+2*l(y,x+step) -l(y+step,x-step)+l(y+step,x+step);
-      gy[y*W+x] = -l(y-step,x-step)-2*l(y-step,x)+l(y-step,x+step)+l(y+step,x-step)+2*l(y+step,x)-l(y+step,x+step);
-    }
-  }
-
-  // Hough-like circular vote: for each gradient pixel, vote for the center
-  // it points toward (perpendicular to gradient = tangent of eddy ring)
-  const votes = new Float32Array(W*H);
-  const RADII = [];
-  for(let r=Math.max(4,maxRpx*0.3); r<=maxRpx; r+=2) RADII.push(r);
-
-  const scanStep=3;
-  for(let y=scanStep;y<H-scanStep;y+=scanStep){
-    for(let x=scanStep;x<W-scanStep;x+=scanStep){
-      const i=y*W+x;
-      if(!valid[i]) continue;
-      const gmag=Math.sqrt(gx[i]*gx[i]+gy[i]*gy[i]);
-      if(gmag < 8) continue; // skip weak gradient pixels
-      // Gradient direction — point toward eddy center candidates
-      const nx=gx[i]/gmag, ny=gy[i]/gmag;
-      for(const r of RADII){
-        // Vote in both directions along gradient normal
-        for(const sign of [1,-1]){
-          const cx=Math.round(x+sign*nx*r);
-          const cy=Math.round(y+sign*ny*r);
-          if(cx<1||cx>=W-1||cy<1||cy>=H-1) continue;
-          // Weight by gradient magnitude + favor smaller radii
-          votes[cy*W+cx] += gmag * (1.0 - r/(maxRpx*1.5));
+  if (satLayers.chl && satCache.chl.img) srcImg = satCache.chl.img;
+  else if (satLayers.sst && satCache.sst.img) srcImg = satCache.sst.img;
+ 
+  if (srcImg) {
+    // Render to offscreen canvas
+    const tmp = document.createElement('canvas');
+    tmp.width = W; tmp.height = H;
+    const tc = tmp.getContext('2d');
+    tc.drawImage(srcImg, 0, 0, W, H);
+ 
+    let px;
+    try { px = tc.getImageData(0, 0, W, H).data; }
+    catch(e) { px = null; }
+ 
+    if (px) {
+      // Build luminance + valid mask
+      const lum   = new Float32Array(W * H);
+      const valid = new Uint8Array(W * H);
+      for (let i = 0; i < W * H; i++) {
+        const b = i * 4;
+        if (px[b + 3] < 10) { lum[i] = 0; valid[i] = 0; continue; }
+        lum[i] = px[b] * 0.299 + px[b + 1] * 0.587 + px[b + 2] * 0.114;
+        valid[i] = 1;
+      }
+ 
+      // Compute Sobel gradients
+      const step = 2;
+      const gx = new Float32Array(W * H);
+      const gy = new Float32Array(W * H);
+      for (let y = step; y < H - step; y++) {
+        for (let x = step; x < W - step; x++) {
+          if (!valid[y * W + x]) continue;
+          const l = (r, c) => valid[r * W + c] ? lum[r * W + c] : lum[y * W + x];
+          gx[y * W + x] = -l(y - step, x - step) + l(y - step, x + step) - 2 * l(y, x - step) + 2 * l(y, x + step) - l(y + step, x - step) + l(y + step, x + step);
+          gy[y * W + x] = -l(y - step, x - step) - 2 * l(y - step, x) - l(y - step, x + step) + l(y + step, x - step) + 2 * l(y + step, x) + l(y + step, x + step);
         }
       }
-    }
-  }
-
-  // Find local maxima in vote map = eddy center candidates
-  const threshold = sens * 200;
-  const candidates = [];
-  const suppress = maxRpx; // non-max suppression radius
-  for(let y=suppress;y<H-suppress;y+=2){
-    for(let x=suppress;x<W-suppress;x+=2){
-      const v=votes[y*W+x];
-      if(v < threshold) continue;
-      // Check it's a local max in suppress-radius window
-      let isMax=true;
-      for(let dy=-4;dy<=4&&isMax;dy+=2){
-        for(let dx=-4;dx<=4&&isMax;dx+=2){
-          if(votes[(y+dy)*W+(x+dx)] > v) isMax=false;
+ 
+      // Hough-like circular vote
+      const votes = new Float32Array(W * H);
+      const RADII = [];
+      for (let r = Math.max(4, maxRpx * 0.3); r <= maxRpx; r += 2) RADII.push(r);
+ 
+      const scanStep = 3;
+      for (let y = scanStep; y < H - scanStep; y += scanStep) {
+        for (let x = scanStep; x < W - scanStep; x += scanStep) {
+          const i = y * W + x;
+          if (!valid[i]) continue;
+          const gmag = Math.sqrt(gx[i] * gx[i] + gy[i] * gy[i]);
+          if (gmag < 8) continue;
+          const nx = gx[i] / gmag, ny = gy[i] / gmag;
+          for (const r of RADII) {
+            for (const sign of [1, -1]) {
+              const cx = Math.round(x + sign * nx * r);
+              const cy = Math.round(y + sign * ny * r);
+              if (cx < 1 || cx >= W - 1 || cy < 1 || cy >= H - 1) continue;
+              votes[cy * W + cx] += gmag * (1.0 - r / (maxRpx * 1.5));
+            }
+          }
         }
       }
-      if(!isMax) continue;
-      candidates.push({x,y,score:v});
-    }
-  }
-
-  // Non-maximum suppression — remove overlapping candidates
-  candidates.sort((a,b)=>b.score-a.score);
-  const kept=[], usedPts=new Set();
-  for(const c of candidates){
-    const key=`${Math.round(c.x/suppress)}_${Math.round(c.y/suppress)}`;
-    if(usedPts.has(key)) continue;
-    usedPts.add(key);
-    kept.push(c);
-    if(kept.length>=20) break; // cap
-  }
-
-  // For each kept center: determine radius, sense, and convert to geo
-  const results=[];
-  for(const c of kept){
-    if(!valid[c.y*W+c.x]) continue;
-
-    // Estimate best-fit radius by finding ring of max gradient magnitude
-    let bestR=maxRpx*0.5, bestRscore=0;
-    for(const r of RADII){
-      let ringScore=0, ringN=0;
-      const nSamples=Math.max(8, Math.round(r*1.2));
-      for(let i=0;i<nSamples;i++){
-        const angle=(i/nSamples)*Math.PI*2;
-        const rx=Math.round(c.x+Math.cos(angle)*r);
-        const ry=Math.round(c.y+Math.sin(angle)*r);
-        if(rx<0||rx>=W||ry<0||ry>=H) continue;
-        ringScore+=Math.sqrt(gx[ry*W+rx]**2+gy[ry*W+rx]**2);
-        ringN++;
+ 
+      // Find local maxima in vote map
+      const threshold = sens * 200;
+      const candidates = [];
+      const suppress = maxRpx;
+      for (let y = suppress; y < H - suppress; y += 2) {
+        for (let x = suppress; x < W - suppress; x += 2) {
+          const v = votes[y * W + x];
+          if (v < threshold) continue;
+          let isMax = true;
+          for (let dy = -4; dy <= 4 && isMax; dy += 2) {
+            for (let dx = -4; dx <= 4 && isMax; dx += 2) {
+              if (votes[(y + dy) * W + (x + dx)] > v) isMax = false;
+            }
+          }
+          if (!isMax) continue;
+          candidates.push({ x, y, score: v });
+        }
       }
-      if(ringN>4 && ringScore/ringN > bestRscore){ bestRscore=ringScore/ringN; bestR=r; }
+ 
+      // Non-maximum suppression
+      candidates.sort((a, b) => b.score - a.score);
+      const kept = [], usedPts = new Set();
+      for (const c of candidates) {
+        const key = `${Math.round(c.x / suppress)}_${Math.round(c.y / suppress)}`;
+        if (usedPts.has(key)) continue;
+        usedPts.add(key);
+        kept.push(c);
+        if (kept.length >= 20) break;
+      }
+ 
+      // Process each satellite candidate
+      for (const c of kept) {
+        if (!valid[c.y * W + c.x]) continue;
+ 
+        // Estimate best-fit radius
+        let bestR = maxRpx * 0.5, bestRscore = 0;
+        for (const r of RADII) {
+          let ringScore = 0, ringN = 0;
+          const nSamples = Math.max(8, Math.round(r * 1.2));
+          for (let i = 0; i < nSamples; i++) {
+            const angle = (i / nSamples) * Math.PI * 2;
+            const rx = Math.round(c.x + Math.cos(angle) * r);
+            const ry = Math.round(c.y + Math.sin(angle) * r);
+            if (rx < 0 || rx >= W || ry < 0 || ry >= H) continue;
+            ringScore += Math.sqrt(gx[ry * W + rx] ** 2 + gy[ry * W + rx] ** 2);
+            ringN++;
+          }
+          if (ringN > 4 && ringScore / ringN > bestRscore) { bestRscore = ringScore / ringN; bestR = r; }
+        }
+ 
+        // Determine rotation sense from gradient curl on ring
+        let curlSum = 0, curlN = 0;
+        const cr = Math.round(bestR * 0.7);
+        const nS = 12;
+        for (let i = 0; i < nS; i++) {
+          const a = (i / nS) * Math.PI * 2;
+          const rx = Math.round(c.x + Math.cos(a) * cr);
+          const ry = Math.round(c.y + Math.sin(a) * cr);
+          if (rx < 2 || rx >= W - 2 || ry < 2 || ry >= H - 2) continue;
+          const tx = -Math.sin(a), ty = Math.cos(a);
+          const proj = gx[ry * W + rx] * tx + gy[ry * W + rx] * ty;
+          curlSum += proj; curlN++;
+        }
+        const sense = curlN > 3 ? (curlSum / curlN > 0 ? 'CCW' : 'CW') : 'CW';
+        const strength = Math.min(1, c.score / (threshold * 3));
+ 
+        // Convert canvas coords to geo
+        const [lat, lng] = canvasToGeo(c.x, c.y);
+        const [latR]     = canvasToGeo(c.x, c.y - bestR);
+        const radiusDeg  = Math.abs(latR - lat);
+        const radiusMi   = radiusDeg * 69;
+ 
+        if (radiusMi > maxRadiusMi) continue;
+        if (radiusMi < 0.2) continue;
+ 
+        allCandidates.push({
+          lat, lng, radiusDeg, radiusMi, sense, strength,
+          score: c.score, source: 'satellite',
+          cx: c.x, cy: c.y, radiusPx: bestR
+        });
+      }
     }
-
-    // Determine rotation sense: compute tangential vs radial gradient component
-    // on the ring — CCW eddies have tangential flow; sense from curl sign
-    let curlSum=0, curlN=0;
-    const cr=Math.round(bestR*0.7);
-    const nS=12;
-    for(let i=0;i<nS;i++){
-      const a=(i/nS)*Math.PI*2;
-      const rx=Math.round(c.x+Math.cos(a)*cr);
-      const ry=Math.round(c.y+Math.sin(a)*cr);
-      if(rx<2||rx>=W-2||ry<2||ry>=H-2) continue;
-      // Tangent direction at this point on ring
-      const tx=-Math.sin(a), ty=Math.cos(a);
-      // Gradient projected onto tangent = curl indicator
-      const proj=gx[ry*W+rx]*tx + gy[ry*W+rx]*ty;
-      curlSum+=proj; curlN++;
-    }
-    const sense = curlN>3 ? (curlSum/curlN > 0 ? 'CCW' : 'CW') : 'CW';
-    const strength = Math.min(1, c.score / (threshold*3));
-
-    // Convert canvas coords to geo
-    const [lat, lng] = canvasToGeo(c.x, c.y);
-    const [latR]     = canvasToGeo(c.x, c.y - bestR);
-    const radiusDeg  = Math.abs(latR - lat);
-    const radiusMi   = radiusDeg * 69;
-
-    if(radiusMi > 8) continue; // skip if too big
-
-    results.push({lat,lng,radiusPx:bestR,radiusDeg,radiusMi,sense,strength,score:c.score,cx:c.x,cy:c.y});
   }
-
-  return results;
+ 
+  // ─────────────────────────────────────────────────────────────
+  // MERGE & BOOST: Combine candidates from both methods
+  // Features found by both current AND satellite get higher score
+  // ─────────────────────────────────────────────────────────────
+  if (!allCandidates.length) return [];
+ 
+  // Sort by score
+  allCandidates.sort((a, b) => b.score - a.score);
+ 
+  // Merge nearby candidates — boost score if from different sources
+  const merged = [];
+  const mergeUsed = new Set();
+  const MERGE_DIST_DEG = maxRadiusMi / 69 * 1.5; // merge if within 1.5x max radius
+ 
+  for (let i = 0; i < allCandidates.length; i++) {
+    if (mergeUsed.has(i)) continue;
+    const a = allCandidates[i];
+    let bestMatch = null;
+    let bestMatchIdx = -1;
+ 
+    // Look for a nearby candidate from a DIFFERENT source
+    for (let j = i + 1; j < allCandidates.length; j++) {
+      if (mergeUsed.has(j)) continue;
+      const b = allCandidates[j];
+      if (b.source === a.source) continue; // same source — don't merge
+      const dist = Math.hypot(b.lat - a.lat, b.lng - a.lng);
+      if (dist < MERGE_DIST_DEG) {
+        bestMatch = b;
+        bestMatchIdx = j;
+        break;
+      }
+    }
+ 
+    if (bestMatch) {
+      // DUAL-SOURCE DETECTION — high confidence!
+      mergeUsed.add(bestMatchIdx);
+      // Average position, keep better score, boost it
+      const lat = (a.lat + bestMatch.lat) / 2;
+      const lng = (a.lng + bestMatch.lng) / 2;
+      const radiusMi = (a.radiusMi + bestMatch.radiusMi) / 2;
+      const radiusDeg = radiusMi / 69;
+      // Use consistent sense — prefer current-based (more physically meaningful)
+      const sense = a.source === 'current' ? a.sense : bestMatch.sense;
+      const strength = Math.min(1, (a.strength + bestMatch.strength) * 0.75);
+ 
+      merged.push({
+        lat, lng, radiusDeg, radiusMi, sense, strength,
+        score: (a.score + bestMatch.score) * 1.5, // 50% boost for dual detection
+        source: 'both',
+        confidence: 'HIGH',
+        cx: a.cx || bestMatch.cx,
+        cy: a.cy || bestMatch.cy,
+        radiusPx: a.radiusPx || bestMatch.radiusPx
+      });
+    } else {
+      // Single source detection
+      merged.push({
+        ...a,
+        confidence: a.source === 'current' ? 'MEDIUM' : 'LOW'
+      });
+    }
+    mergeUsed.add(i);
+  }
+ 
+  // Final non-maximum suppression on merged results
+  merged.sort((a, b) => b.score - a.score);
+  const final = [];
+  const finalUsed = new Set();
+  for (const c of merged) {
+    const key = `${Math.round(c.lat * 20)}_${Math.round(c.lng * 20)}`;
+    if (finalUsed.has(key)) continue;
+    finalUsed.add(key);
+    final.push(c);
+    if (final.length >= 15) break;
+  }
+ 
+  return final;
 }
+ 
+ 
+// ─────────────────────────────────────────────────────────────────
+// ALSO UPDATE: updateMicroEddySidebar() to show detection source
+// ─────────────────────────────────────────────────────────────────
+//
+// Find the existing updateMicroEddySidebar() function and replace it
+// with this version that shows whether each eddy was found by
+// currents, satellite, or both:
+ 
+function updateMicroEddySidebar(){
+  const el = document.getElementById('me-list');
+  if (!el) return;
+  if (!microEddies.length) {
+    el.innerHTML = '<div style="color:var(--muted)">None detected — load currents or satellite data, then toggle Micro-Eddies on</div>';
+    return;
+  }
+  const sorted = [...microEddies].sort((a, b) => b.score - a.score);
+  el.innerHTML = sorted.slice(0, 10).map((e, i) => {
+    const col = e.sense === 'CCW' ? '#00ccff' : '#ff6600';
+    const desc = e.sense === 'CCW' ? 'Cool/upwelling' : 'Warm/sinking';
+    // Source badge
+    const srcLabel = e.source === 'both' ? '🎯 CURRENT + SAT'
+                   : e.source === 'current' ? '🌊 CURRENT CURL'
+                   : '🛰 SAT GRADIENT';
+    const srcColor = e.source === 'both' ? 'var(--bait)'
+                   : e.source === 'current' ? 'var(--cold)'
+                   : 'var(--warm)';
+    const confLabel = e.confidence === 'HIGH' ? '● HIGH'
+                    : e.confidence === 'MEDIUM' ? '◐ MED'
+                    : '○ LOW';
+    return `<div class="eddy-card" onclick="panTo(${e.lat},${e.lng})" style="border-left:2px solid ${col};margin-bottom:4px">
+      <div style="display:flex;justify-content:space-between;align-items:center">
+        <div style="font-family:'Bebas Neue';font-size:11px;color:${col};letter-spacing:1px">${e.sense === 'CCW' ? '↺' : '↻'} ${e.radiusMi.toFixed(1)}mi · ${desc}</div>
+        <div style="font-family:'Space Mono';font-size:7px;color:${srcColor}">${confLabel}</div>
+      </div>
+      <div style="font-family:'Space Mono';font-size:7px;color:${srcColor};margin:2px 0">${srcLabel}</div>
+      <div style="font-family:'Space Mono';font-size:8px;color:var(--muted)">${e.lat.toFixed(4)}°N ${Math.abs(e.lng).toFixed(4)}°W</div>
+    </div>`;
+  }).join('');
+  if (microEddies.length > 10) {
+    el.innerHTML += `<div style="font-family:'Space Mono';font-size:8px;color:var(--muted);margin-top:4px">+${microEddies.length - 10} more</div>`;
+  }
+}
+ 
+ 
+// ─────────────────────────────────────────────────────────────────
+// ALSO UPDATE: The sidebar label for micro-eddies
+// ─────────────────────────────────────────────────────────────────
+//
+// Find this HTML in the sidebar:
+//
+//   <span class="lb-src">Sat</span>
+//
+// (the one inside the btn-me layer button)
+// Change it to:
+//
+//   <span class="lb-src">Hybrid</span>
+//
+// And find:
+//
+//   Detected from satellite gradients
+//
+// Change it to:
+//
+//   Detected from current curl + satellite gradients
+ 
+ 
+// ─────────────────────────────────────────────────────────────────
+// SUMMARY OF ALL CHANGES
+// ─────────────────────────────────────────────────────────────────
+//
+// 1. Sensitivity slider: added auto-redetect on change
+// 2. Size slider: added auto-redetect on change
+// 3. detectMicroEddies(): now hybrid — uses current vectors (curl
+//    analysis) AND satellite gradients, merges results, boosts
+//    confidence when both sources agree
+// 4. updateMicroEddySidebar(): shows source (current/satellite/both)
+//    and confidence level for each detected eddy
+// 5. Sidebar label: "Sat" → "Hybrid", updated description
+//
+// HOW IT WORKS:
+//   - If only currents are loaded: detects from vorticity (curl)
+//   - If only satellite is loaded: detects from pixel gradients
+//   - If both are loaded: runs both, merges, and boosts features
+//     found by both methods (marked as HIGH confidence)
+//   - Sliders now instantly re-run detection when changed
+ 
 
 function updateMicroEddySidebar(){
   const el=document.getElementById('me-list');
