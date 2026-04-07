@@ -3624,10 +3624,33 @@ async function runAnalysis(){
     });
   } else {
     // Fallback — original prompt if speciesPrompts.js not loaded
-    systemPrompt = `Expert offshore fishing guide for ${region.replace('_',' ')}. Respond only valid JSON.`;
-    const boundsDesc = `SEARCH AREA: ${sb.label}.\nLat: ${sb.south.toFixed(3)}–${sb.north.toFixed(3)}°N  Lng: ${sb.west.toFixed(3)}–${sb.east.toFixed(3)}°W\nHARD CONSTRAINT: All hotspot coordinates MUST be within these bounds.`;
-    const spContext = selSp.map(s=>`${s.label}: SST pref ${s.sst[0]}–${s.sst[1]}°F, depth ${s.depth}, chl ${s.chl}. ${s.tip}`).join('\n');
-    userPrompt = `Analyze oceanographic data for ${spNames}.\n\nSATELLITE: ${satContext}\nCURRENTS: ${curSummaryTxt}\n${eddyContext}\n${boundsDesc}\nMonth: ${month}.\nSPECIES:\n${spContext}\n\nRespond ONLY valid JSON:\n{"overall":"...","conditions_rating":"Excellent|Good|Fair|Poor","avg_current_kt":"${avgSpd}","dominant_flow":"${domDir}","hotspots":[{"name":"...","location":"...","lat":${sb.centerLat.toFixed(3)},"lng":${sb.centerLng.toFixed(3)},"why":"...","species":["${spNames}"],"primary_species":"${spNames}","technique":"...","confidence":"High|Medium|Low","depth_target":"..."}],"pro_tip":"..."}`;
+    systemPrompt = `You are an expert offshore fishing guide for ${region.replace('_',' ')}. You MUST respond with only valid JSON and nothing else.`;
+    const boundsDesc = `SEARCH AREA: ${sb.label}.
+Lat bounds: ${sb.south.toFixed(4)}°N to ${sb.north.toFixed(4)}°N
+Lng bounds: ${sb.west.toFixed(4)}°W to ${sb.east.toFixed(4)}°W
+Center: ${sb.centerLat.toFixed(4)}°N, ${Math.abs(sb.centerLng).toFixed(4)}°W
+HARD CONSTRAINT: Every single hotspot lat/lng coordinate MUST fall within these exact bounds. Check each coordinate before including it.`;
+    const spContext = selSp.map(s=>`${s.label}: SST ${s.sst[0]}–${s.sst[1]}°F, depth ${s.depth}. ${s.tip}`).join('\n');
+    userPrompt = `Find 4 fishing hotspots for ${spNames} within this EXACT search area.
+
+${boundsDesc}
+
+Month: ${month}. Region: ${region.replace('_',' ')}.
+Satellite: ${satContext}
+Currents: ${curSummaryTxt}
+${eddyContext}
+
+Species profiles:
+${spContext}
+
+CRITICAL RULES:
+- Every hotspot lat MUST be between ${sb.south.toFixed(4)} and ${sb.north.toFixed(4)}
+- Every hotspot lng MUST be between ${sb.west.toFixed(4)} and ${sb.east.toFixed(4)}
+- Place spots at realistic fishing depths for each species
+- Do NOT place spots on land
+
+Respond ONLY with this exact JSON structure, no other text:
+{"overall":"2-3 sentence conditions summary","conditions_rating":"Excellent|Good|Fair|Poor","avg_current_kt":"${avgSpd}","dominant_flow":"${domDir}","hotspots":[{"name":"specific location name","location":"X miles bearing from nearest inlet","lat":0.0000,"lng":0.0000,"why":"reason citing satellite and current data","species":["species name"],"primary_species":"species name","technique":"specific fishing method","confidence":"High|Medium|Low","depth_target":"depth range"}],"pro_tip":"one actionable tip for today"}`;
   }
 
   try{
