@@ -4165,23 +4165,34 @@ window.addEventListener('load', () => {
 </div>
 
 <script type="module">
-  // ── V2 imports ──
-  import { CurrentLayer, buildConfidenceBadge } from './currentLayer.js';
-  import { buildSystemPrompt, buildAnalysisPrompt, detectRegion } from './speciesPrompts.js';
+  // ── V2 imports — wrapped in try/catch so a missing file never crashes the app ──
+  try {
+    const { CurrentLayer, buildConfidenceBadge } = await import('./currentLayer.js');
+    const promptModule = await import('./speciesPrompts.js').catch(() => null);
 
-  // Expose prompt builders to global scope so runAnalysis() can use them
-  window.buildSystemPrompt = buildSystemPrompt;
-  window.buildAnalysisPrompt = buildAnalysisPrompt;
-
-  // ── Current layer ──
-  const layer = new CurrentLayer(map, {
-    onConfidenceChange: (meta) => {
-      const badge = document.getElementById('current-badge');
-      if(badge) badge.innerHTML = buildConfidenceBadge(meta);
+    // Expose prompt builders to global scope so runAnalysis() can use them
+    if (promptModule) {
+      window.buildSystemPrompt  = promptModule.buildSystemPrompt;
+      window.buildAnalysisPrompt = promptModule.buildAnalysisPrompt;
     }
-  });
-  map.on('moveend', () => layer.refresh());
-  layer.refresh();
+
+    // Wait for map to be ready before attaching layer
+    function attachCurrentLayer() {
+      if (!window.map) { setTimeout(attachCurrentLayer, 100); return; }
+      const layer = new CurrentLayer(window.map, {
+        onConfidenceChange: (meta) => {
+          const badge = document.getElementById('current-badge');
+          if (badge) badge.innerHTML = buildConfidenceBadge(meta);
+        }
+      });
+      window.map.on('moveend', () => layer.refresh());
+      layer.refresh();
+    }
+    attachCurrentLayer();
+
+  } catch(err) {
+    console.warn('[BlueWater V2] Module import error (app will still work):', err);
+  }
 </script>
 
 </body>
