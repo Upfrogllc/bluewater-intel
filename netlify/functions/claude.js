@@ -269,6 +269,80 @@ exports.handler = async (event) => {
       return { statusCode: 200, headers: CORS, body: JSON.stringify({ image: b64, contentType }) };
     }
 
+    // ── CMEMS Ocean Currents ─────────────────────────────────────────────────
+    if (type === 'cmems_currents') {
+      const { dataset, west, south, east, north, date } = payload;
+      const user = process.env.CMEMS_USER;
+      const pass = process.env.CMEMS_PASS;
+      if (!user || !pass) {
+        return { statusCode: 500, headers: CORS, body: JSON.stringify({ error: 'CMEMS credentials not set (add CMEMS_USER and CMEMS_PASS to Netlify env vars)' }) };
+      }
+
+      const auth = Buffer.from(`${user}:${pass}`).toString('base64');
+      const latStep = 0.2, lngStep = 0.2;
+      const lats = [], lngs = [];
+      for (let la = parseFloat(south) + latStep/2; la < parseFloat(north); la += latStep) {
+        if (lats.length < 10) lats.push(parseFloat(la.toFixed(3)));
+      }
+      for (let ln = parseFloat(west) + lngStep/2; ln < parseFloat(east); ln += lngStep) {
+        if (lngs.length < 10) lngs.push(parseFloat(ln.toFixed(3)));
+      }
+
+      // Use CMEMS OPeNDAP to get u/v current components
+      const results = [];
+      const promises = [];
+      for (const la of lats) {
+        for (const ln of lngs) {
+          promises.push((async () => {
+            try {
+              // CMEMS nrt product — use subset API
+              const subsetUrl = `https://nrt.cmems-du.eu/motu-web/Motu?action=productdownload` +
+                `&service=GLOBAL_ANALYSISFORECAST_PHY_001_024-TDS` +
+                `&product=${dataset}` +
+                `&x_lo=${(ln-0.1).toFixed(3)}&x_hi=${(ln+0.1).toFixed(3)}` +
+                `&y_lo=${(la-0.1).toFixed(3)}&y_hi=${(la+0.1).toFixed(3)}` +
+                `&t_lo=${date}%2000:00:00&t_hi=${date}%2023:59:59` +
+                `&depth_lo=0.493&depth_hi=0.494` +
+                `&variable=uo&variable=vo&out_fmt=json&mode=console`;
+
+              // Simpler: use the CMEMS WMS GetFeatureInfo
+              const wmsUrl = `https://nrt.cmems-du.eu/thredds/wms/${dataset}`;
+              const pU = new URLSearchParams({
+                SERVICE:'WMS', VERSION:'1.1.1', REQUEST:'GetFeatureInfo',
+                LAYERS:'uo', QUERY_LAYERS:'uo', SRS:'EPSG:4326',
+                FORMAT:'image/png', INFO_FORMAT:'text/plain',
+                BBOX:`${ln-0.15},${la-0.15},${ln+0.15},${la+0.15}`,
+                WIDTH:'10', HEIGHT:'10', X:'5', Y:'5',
+                TIME:`${date}T00:00:00Z`, ELEVATION:'-0.5'
+              });
+              const pV = new URLSearchParams({...Object.fromEntries(pU.entries()), LAYERS:'vo', QUERY_LAYERS:'vo'});
+
+              const [ru, rv] = await Promise.all([
+                fetch(`${wmsUrl}?${pU}`, { headers:{ Authorization:`Basic ${auth}` } }),
+                fetch(`${wmsUrl}?${pV}`, { headers:{ Authorization:`Basic ${auth}` } })
+              ]);
+
+              const [tu, tv] = await Promise.all([ru.text(), rv.text()]);
+              const parseVal = t => { const m=t.match(/[-+]?[0-9]*\.?[0-9]+([eE][-+]?[0-9]+)?/); return m?parseFloat(m[0]):null; };
+              const u=parseVal(tu), v=parseVal(tv);
+
+              if (u!==null && v!==null && !isNaN(u) && !isNaN(v)) {
+                const spd = Math.sqrt(u*u+v*v)*1.944;
+                const dir = (Math.atan2(u,v)*180/Math.PI+360)%360;
+                results.push({ lat:la, lng:ln, speed_kt:spd, dir_deg:dir, u:u*1.944, v:v*1.944, sst_c:null });
+              }
+            } catch(e) {}
+          })());
+        }
+      }
+      await Promise.allSettled(promises);
+
+      if (!results.length) {
+        return { statusCode: 502, headers: CORS, body: JSON.stringify({ error:'CMEMS returned no data — check credentials or try Open-Meteo', points:[] }) };
+      }
+      return { statusCode:200, headers:CORS, body: JSON.stringify({ points:results, count:results.length }) };
+    }
+
     // CLAUDE — proxy Anthropic AI
     const { type: _t, ...claudeBody } = payload;
     const response = await fetch('https://api.anthropic.com/v1/messages', {
