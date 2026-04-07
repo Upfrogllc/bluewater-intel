@@ -483,7 +483,6 @@ input[type=range].rng.sst-rng::-moz-range-thumb{background:var(--hot);}
 <div id="app">
   <!-- SIDEBAR -->
   <div id="sidebar">
-  <div id="sidebar">
 
     <div class="sb-sec">
       <div class="sb-ttl">Satellite Layers</div>
@@ -3466,26 +3465,85 @@ function getSearchBounds(){
 }
 
 // ═══════════════════════════════════════════
-// AI ANALYSIS
+// AI ANALYSIS — V2 (species prompts + report signal)
 // ═══════════════════════════════════════════
+
+// Species ID map — maps SPECIES array ids to speciesPrompts.js library IDs
+const SPECIES_PROMPT_MAP = {
+  blue_marlin:  'BLUE_MARLIN',
+  white_marlin: 'WHITE_MARLIN',
+  sailfish:     'SAILFISH',
+  swordfish:    'SWORDFISH',
+  mahi:         'MAHI',
+  dolphin:      'MAHI',
+  wahoo:        'WAHOO',
+  yellowfin:    'YELLOWFIN_TUNA',
+  blackfin:     'BLACKFIN_TUNA',
+  kingfish:     'KINGFISH',
+  cobia:        'SNAPPER_GROUPER',
+  tripletail:   'SNAPPER_GROUPER',
+};
+
+// Detect region from map center latitude
+function detectRegionFromMap() {
+  const b = getViewBounds();
+  const lat = (b.south + b.north) / 2;
+  if (lat >= 24.5 && lat < 29.5) return 'SE_FLORIDA';
+  if (lat >= 29.5 && lat < 37.5) return 'MID_ATLANTIC';
+  if (lat >= 37.5) return 'NORTHEAST';
+  return 'SE_FLORIDA';
+}
+
+// Get current season string
+function getCurrentSeason() {
+  const m = new Date().getMonth() + 1;
+  if (m >= 3 && m <= 5) return 'spring';
+  if (m >= 6 && m <= 8) return 'summer';
+  if (m >= 9 && m <= 11) return 'fall';
+  return 'winter';
+}
+
+// Build SST summary from current grid data
+function buildSSTSummary() {
+  const sstPts = currentGrid.filter(p => p.sst_c != null);
+  if (!sstPts.length) return null;
+  const vals = sstPts.map(p => p.sst_c * 9/5 + 32); // C to F
+  const avg = vals.reduce((a,b)=>a+b,0)/vals.length;
+  const min = Math.min(...vals), max = Math.max(...vals);
+  const gradient = (max - min) / Math.max(1, vals.length * 0.1);
+  return { avg: parseFloat(avg.toFixed(1)), min: parseFloat(min.toFixed(1)), max: parseFloat(max.toFixed(1)), gradient: parseFloat(gradient.toFixed(2)) };
+}
+
+// Build current summary object for prompt
+function buildCurrentSummary() {
+  if (!currentGrid.length) return null;
+  const speeds = currentGrid.map(p => p.speed_kt);
+  const avgSpd = speeds.reduce((a,b)=>a+b,0)/speeds.length;
+  const aU = currentGrid.reduce((s,p)=>s+p.u,0)/currentGrid.length;
+  const aV = currentGrid.reduce((s,p)=>s+p.v,0)/currentGrid.length;
+  const dir = Math.round((Math.atan2(aU,aV)*180/Math.PI+360)%360);
+  return { speed_kt: parseFloat(avgSpd.toFixed(2)), dir_deg: dir, source: activeCurSrc || 'unknown' };
+}
+
+// Build eddy list for prompt
+function buildEddySummary() {
+  return detectedEddies.map(e => ({
+    description: `${e.sense} eddy @${e.lat.toFixed(3)}N/${Math.abs(e.lng).toFixed(3)}W ~${(e.radius_deg*69).toFixed(0)}mi ${e.sense==='CCW'?'cyclonic/upwelling':'anticyclonic/warm-core'}`
+  }));
+}
+
 async function runAnalysis(){
   const btn=document.getElementById('abtn');
-  btn.disabled=true;btn.textContent='⏳ ANALYZING...';
+  btn.disabled=true; btn.textContent='⏳ ANALYZING...';
   hotspots=[];
   document.getElementById('aibody').innerHTML=`<div style="padding:14px">
-    <div class="ldstep"><div class="spin"></div>Reading satellite imagery layers...</div>
+    <div class="ldstep"><div class="spin"></div>Fetching recent fishing reports...</div>
     <div class="ldb"><div class="ldf"></div></div>
-    <div class="ldstep"><div class="spin"></div>Processing live current vectors...</div>
+    <div class="ldstep"><div class="spin"></div>Reading satellite & current data...</div>
     <div class="ldb"><div class="ldf" style="animation-delay:.5s"></div></div>
     <div class="ldstep"><div class="spin"></div>Claude identifying hotspots...</div>
     <div class="ldb"><div class="ldf" style="animation-delay:1s"></div></div>
   </div>`;
-
-  const apiKey=localStorage.getItem('bwi_key')||'';
-  if(!apiKey){
-    document.getElementById('aibody').innerHTML=`<div class="aimt"><div class="aimt-ico">🔑</div><div class="aimt-txt">Click <strong>API Key</strong> in the header to enter your Anthropic key.</div></div>`;
-    btn.disabled=false;btn.textContent='🎯 ANALYZE WITH AI';return;
-  }
 
   // Guard: need at least one species
   if(selectedSpecies.size===0){
@@ -3493,99 +3551,115 @@ async function runAnalysis(){
     btn.disabled=false; btn.textContent='🎯 SELECT A SPECIES'; return;
   }
 
+  // Pick the primary species for the prompt (first selected)
+  const primarySpeciesId = [...selectedSpecies][0];
+  const promptSpeciesId = SPECIES_PROMPT_MAP[primarySpeciesId] || 'SAILFISH';
+  const region = detectRegionFromMap();
+  const season = getCurrentSeason();
+  const sb = getSearchBounds();
+  const today = new Date().toISOString().slice(0, 10);
+  const month = ['January','February','March','April','May','June','July','August','September','October','November','December'][new Date().getMonth()];
+
+  // ── Run fishing report fetch and build local data summaries in parallel ──
+  const [reportResult] = await Promise.allSettled([
+    fetch('/.netlify/functions/fishing-reports', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        species: SPECIES.find(s=>s.id===primarySpeciesId)?.label || primarySpeciesId,
+        region,
+        location: `${region.replace('_',' ')} offshore`,
+        date: today
+      })
+    }).then(r => r.json())
+  ]);
+
+  const reportSignal = reportResult.status === 'fulfilled' ? reportResult.value?.signal : null;
+
+  // ── Build ocean data summaries ──
+  const sstData     = buildSSTSummary();
+  const currentData = buildCurrentSummary();
+  const eddies      = buildEddySummary();
+
+  // Current summary for prompt (legacy format kept for existing context block)
   const DIRS=['N','NNE','NE','ENE','E','ESE','SE','SSE','S','SSW','SW','WSW','W','WNW','NW','NNW'];
-  let curSummary='No live current data.',avgSpd='0',domDir='NNE';
+  let avgSpd='0', domDir='NNE';
   if(currentGrid.length>0){
-    const speeds=currentGrid.map(p=>p.speed_kt);
-    avgSpd=(speeds.reduce((a,b)=>a+b,0)/speeds.length).toFixed(2);
-    const maxSpd=Math.max(...speeds).toFixed(2);
+    avgSpd = (currentGrid.map(p=>p.speed_kt).reduce((a,b)=>a+b,0)/currentGrid.length).toFixed(2);
     const aU=currentGrid.reduce((s,p)=>s+p.u,0)/currentGrid.length;
     const aV=currentGrid.reduce((s,p)=>s+p.v,0)/currentGrid.length;
     const deg=Math.round((Math.atan2(aU,aV)*180/Math.PI+360)%360);
     domDir=DIRS[Math.round(deg/22.5)%16];
-    const fastest=[...currentGrid].sort((a,b)=>b.speed_kt-a.speed_kt).slice(0,5);
-    const sstSamples=currentGrid.filter(p=>p.sst_c).slice(0,4).map(p=>`${(p.sst_c*9/5+32).toFixed(1)}F@${p.lat.toFixed(2)}N`).join(', ');
-    curSummary=`MeteoFrance SMOC (${currentGrid.length} pts, ${dataFetchTime?.toLocaleTimeString()||'unknown'}): avg ${avgSpd}kt max ${maxSpd}kt flow ${domDir}. Fastest: ${fastest.map(p=>`${p.lat.toFixed(2)}N/${Math.abs(p.lng).toFixed(2)}W@${p.speed_kt.toFixed(2)}kt`).join('; ')}. SST: ${sstSamples||'N/A'}`;
   }
 
-  const eddyContext=detectedEddies.length>0
-    ?'EDDIES: '+detectedEddies.map(e=>`${e.sense} eddy @${e.lat.toFixed(3)}N/${Math.abs(e.lng).toFixed(3)}W ~${(e.radius_deg*69).toFixed(0)}mi ${e.sense==='CCW'?'cyclonic/upwelling':'anticyclonic/warm-core'}`).join('; ')
-    :'No significant eddies detected.';
-
-  const satContext=`NASA/CoastWatch satellite imagery (${selectedDate}): Chlorophyll source: ${CHL_SOURCES[activeChlSrc]?.label||'NOAA-20'} (${CHL_SOURCES[activeChlSrc]?.res||'1km'}). MUR SST daily gap-filled. Real satellite data showing current ocean color and temperature patterns.`;
-
-  // Build species-specific context
   const selSp = SPECIES.filter(s=>selectedSpecies.has(s.id));
   const spNames = selSp.map(s=>s.label).join(', ');
-  const spContext = selSp.map(s=>
-    `${s.label}: SST pref ${s.sst[0]}–${s.sst[1]}°F, depth ${s.depth}, chl ${s.chl}. ${s.tip}`
-  ).join('\n');
+  const satContext=`NASA/CoastWatch satellite imagery (${selectedDate}): Chlorophyll source: ${CHL_SOURCES[activeChlSrc]?.label||'NOAA-20'} (${CHL_SOURCES[activeChlSrc]?.res||'1km'}). MUR SST daily gap-filled.`;
+  const curSummaryTxt = currentData
+    ? `Source: ${currentData.source} — avg ${currentData.speed_kt}kt flowing ${DIRS[Math.round(currentData.dir_deg/22.5)%16]}`
+    : 'No live current data.';
+  const eddyContext = eddies.length>0
+    ? 'EDDIES: '+eddies.map(e=>e.description).join('; ')
+    : 'No significant eddies detected.';
 
-  const month=['January','February','March','April','May','June','July','August','September','October','November','December'][new Date().getMonth()];
+  // ── Build the V2 system prompt using speciesPrompts library ──
+  // (imported via speciesPrompts.js — buildSystemPrompt / buildAnalysisPrompt)
+  let systemPrompt, userPrompt;
 
-  // Get constrained search area — either visible viewport or home port radius
-  const sb = getSearchBounds();
-  const boundsDesc = `SEARCH AREA: ${sb.label}.
-Lat bounds: ${sb.south.toFixed(3)}°N to ${sb.north.toFixed(3)}°N
-Lng bounds: ${sb.west.toFixed(3)}°W to ${sb.east.toFixed(3)}°W
-Center: ${sb.centerLat.toFixed(3)}°N, ${Math.abs(sb.centerLng).toFixed(3)}°W
-HARD CONSTRAINT: Every hotspot lat/lng MUST be within these exact bounds. Do not recommend spots outside this area.`;
-
-  const prompt=`You are an expert offshore fishing guide. Analyze this REAL oceanographic data. TARGET SPECIES: ${spNames}.
-
-SATELLITE DATA (${selectedDate}):
-${satContext}
-
-LIVE OCEAN CURRENTS:
-${curSummary}
-
-${eddyContext}
-
-${boundsDesc}
-
-Month: ${month}.
-
-TARGET SPECIES PROFILES:
-${spContext}
-
-INSTRUCTIONS:
-- CRITICAL: All hotspot coordinates MUST fall within the bounds above. No exceptions.
-- For EACH hotspot, specify which target species is most likely there and why.
-- Use actual satellite chlorophyll patterns (color breaks = bait), SST temperature breaks, current edges, eddy features, and depth structure.
-- Be species-specific — a wahoo spot differs from a sailfish spot even at similar coordinates.
-- Identify 3-4 specific fishing hotspots within the search area.
-
-Respond ONLY valid JSON:
-{"overall":"2-3 sentence assessment of conditions for ${spNames} in this specific area","conditions_rating":"Excellent|Good|Fair|Poor","avg_current_kt":"${avgSpd}","dominant_flow":"${domDir}","hotspots":[{"name":"descriptive name","location":"bearing and distance from nearest recognizable reference","lat":${sb.centerLat.toFixed(3)},"lng":${sb.centerLng.toFixed(3)},"why":"specific reason citing satellite/current data AND why this suits the target species","species":["Blue Marlin"],"primary_species":"Blue Marlin","technique":"specific method for this species in these conditions","confidence":"High|Medium|Low","depth_target":"1000ft+"}],"pro_tip":"one species-specific actionable tip for ${spNames} today"}`;
+  if(typeof buildSystemPrompt === 'function') {
+    // V2 path — use species prompt library
+    systemPrompt = buildSystemPrompt(promptSpeciesId, region);
+    userPrompt = buildAnalysisPrompt({
+      speciesId:   promptSpeciesId,
+      region,
+      bounds: { north: sb.north, south: sb.south, east: sb.east, west: sb.west },
+      sstData,
+      chlorData:   null, // chlorophyll pixel values not extracted to numbers yet
+      currentData,
+      fronts:      [],
+      eddies,
+      date:        today,
+      season,
+      reportSignal,
+      numHotspots: 4
+    });
+  } else {
+    // Fallback — original prompt if speciesPrompts.js not loaded
+    systemPrompt = `Expert offshore fishing guide for ${region.replace('_',' ')}. Respond only valid JSON.`;
+    const boundsDesc = `SEARCH AREA: ${sb.label}.\nLat: ${sb.south.toFixed(3)}–${sb.north.toFixed(3)}°N  Lng: ${sb.west.toFixed(3)}–${sb.east.toFixed(3)}°W\nHARD CONSTRAINT: All hotspot coordinates MUST be within these bounds.`;
+    const spContext = selSp.map(s=>`${s.label}: SST pref ${s.sst[0]}–${s.sst[1]}°F, depth ${s.depth}, chl ${s.chl}. ${s.tip}`).join('\n');
+    userPrompt = `Analyze oceanographic data for ${spNames}.\n\nSATELLITE: ${satContext}\nCURRENTS: ${curSummaryTxt}\n${eddyContext}\n${boundsDesc}\nMonth: ${month}.\nSPECIES:\n${spContext}\n\nRespond ONLY valid JSON:\n{"overall":"...","conditions_rating":"Excellent|Good|Fair|Poor","avg_current_kt":"${avgSpd}","dominant_flow":"${domDir}","hotspots":[{"name":"...","location":"...","lat":${sb.centerLat.toFixed(3)},"lng":${sb.centerLng.toFixed(3)},"why":"...","species":["${spNames}"],"primary_species":"${spNames}","technique":"...","confidence":"High|Medium|Low","depth_target":"..."}],"pro_tip":"..."}`;
+  }
 
   try{
-    const res=await fetch('https://api.anthropic.com/v1/messages',{
-      method:'POST',
-      headers:{'Content-Type':'application/json','x-api-key':apiKey,'anthropic-version':'2023-06-01','anthropic-dangerous-direct-browser-access':'true'},
-      body:JSON.stringify({model:'claude-sonnet-4-20250514',max_tokens:1200,system:'Expert offshore fishing guide for Treasure Coast Florida. Respond only valid JSON.',messages:[{role:'user',content:prompt}]})
+    // Route through the serverside claude.js function (keeps API key off client)
+    const res = await fetch('/.netlify/functions/claude', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ type: 'analyze', prompt: userPrompt, system: systemPrompt })
     });
-    if(!res.ok){const e=await res.json();throw new Error(e.error?.message||`HTTP ${res.status}`);}
-    const data=await res.json();
-    const parsed=JSON.parse(data.content.map(i=>i.text||'').join('').replace(/```json|```/g,'').trim());
-    // Clamp hotspots to search bounds — guard against AI ignoring constraints
+    if(!res.ok){ const e=await res.json(); throw new Error(e.error||`HTTP ${res.status}`); }
+    const data = await res.json();
+    const parsed = JSON.parse(data.content.map(i=>i.text||'').join('').replace(/```json|```/g,'').trim());
+
+    // Clamp hotspots to search bounds
     const rawHs = parsed.hotspots||[];
     hotspots = rawHs.filter(hs => {
-      const lat = parseFloat(hs.lat), lng = parseFloat(hs.lng);
+      const lat=parseFloat(hs.lat), lng=parseFloat(hs.lng);
       if(isNaN(lat)||isNaN(lng)) return false;
       const inBounds = lat>=sb.south && lat<=sb.north && lng>=sb.west && lng<=sb.east;
       if(!inBounds) console.warn('Hotspot outside bounds, dropped:', hs.name, lat, lng);
       return inBounds;
     });
     if(!hotspots.length && rawHs.length){
-      // All were outside — keep them anyway (better than nothing) but log it
-      console.warn('All hotspots were outside bounds — showing anyway');
+      console.warn('All hotspots outside bounds — showing anyway');
       hotspots = rawHs;
     }
     renderResults(parsed);
   }catch(e){
     document.getElementById('aibody').innerHTML=`<div class="aimt"><div class="aimt-ico">⚠️</div><div class="aimt-txt">Analysis failed:<br><small style="color:var(--muted)">${e.message}</small></div></div>`;
   }
-  btn.disabled=false;btn.textContent='🔄 RE-ANALYZE';
+  btn.disabled=false; btn.textContent='🔄 RE-ANALYZE';
 }
 
 // ═══════════════════════════════════════════
@@ -4091,19 +4165,24 @@ window.addEventListener('load', () => {
 </div>
 
 <script type="module">
-      import { CurrentLayer, buildConfidenceBadge } from './currentLayer.js';
+  // ── V2 imports ──
+  import { CurrentLayer, buildConfidenceBadge } from './currentLayer.js';
+  import { buildSystemPrompt, buildAnalysisPrompt, detectRegion } from './speciesPrompts.js';
 
-      const layer = new CurrentLayer(map, {
-        onConfidenceChange: (meta) => {
-          document.getElementById('current-badge').innerHTML = buildConfidenceBadge(meta);
-        }
-      });
+  // Expose prompt builders to global scope so runAnalysis() can use them
+  window.buildSystemPrompt = buildSystemPrompt;
+  window.buildAnalysisPrompt = buildAnalysisPrompt;
 
-      map.on('moveend', () => layer.refresh());
-      layer.refresh();
-    </script>
+  // ── Current layer ──
+  const layer = new CurrentLayer(map, {
+    onConfidenceChange: (meta) => {
+      const badge = document.getElementById('current-badge');
+      if(badge) badge.innerHTML = buildConfidenceBadge(meta);
+    }
+  });
+  map.on('moveend', () => layer.refresh());
+  layer.refresh();
+</script>
 
-  </body>
-</html>
 </body>
 </html>
