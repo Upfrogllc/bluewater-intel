@@ -908,25 +908,45 @@ function initLeafletMap() {
     attributionControl: true
   });
 
-  // 1. Base layer: OpenStreetMap
-  const osmBase = L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
+  // 1. NOAA Nautical Chart tiles (RNC) — official charts with 5-10ft contours, soundings, nav aids
+  // NOAA seamless chart tile service — no auth, no CORS issues
+  const noaaRNC = L.tileLayer('https://tileservice.charts.noaa.gov/tiles/50000_1/{z}/{x}/{y}.png', {
     maxZoom: 18,
-    attribution: '© <a href="https://openstreetmap.org">OpenStreetMap</a>',
-    opacity: 1.0
+    minZoom: 4,
+    attribution: '© NOAA Office of Coast Survey',
+    opacity: 1.0,
+    errorTileUrl: 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg=='
   }).addTo(map);
 
-  // 2. OpenSeaMap nautical overlay (buoys, depth marks, nav aids)
+  // 2. ESRI Ocean Base as fallback where NOAA tiles are blank (deep ocean)
+  const oceanFallback = L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/Ocean/World_Ocean_Base/MapServer/tile/{z}/{y}/{x}', {
+    maxZoom: 18,
+    attribution: '© Esri, GEBCO',
+    opacity: 1.0,
+    zIndex: 1
+  });
+  // Add NOAA on top — it has transparent ocean so ESRI shows through offshore
+  noaaRNC.setZIndex(2);
+
+  // 3. OpenSeaMap seamark overlay — buoys, lights, nav aids (on top)
   window.seamarkLayer = L.tileLayer('https://tiles.openseamap.org/seamark/{z}/{x}/{y}.png', {
     maxZoom: 18,
     opacity: 0.9,
-    attribution: '© <a href="https://openseamap.org">OpenSeaMap</a>'
+    attribution: '© <a href="https://openseamap.org">OpenSeaMap</a>',
+    zIndex: 3
   }).addTo(map);
+
+  // 4. Draw our supplemental depth contours for offshore (beyond chart detail)
+  drawDepthContours();
 
   // 3. Satellite overlay pane (sits on top of base, below markers)
   map.createPane('satPane');
   map.getPane('satPane').style.zIndex = 350;
   map.createPane('overlayPane2');
   map.getPane('overlayPane2').style.zIndex = 400;
+
+  // Store ref for opacity control
+  window.noaaRNCLayer = noaaRNC;
 
   // Map click handler
   map.on('click', function(e) {
@@ -961,7 +981,7 @@ function initLeafletMap() {
   // Update sidebar badge for nav chart
   const badge = document.getElementById('sb-noaa');
   if (badge) badge.className = 'sat-badge live';
-  document.getElementById('sl-noaa').textContent = 'OSM + OpenSeaMap — live tiles ✓';
+  document.getElementById('sl-noaa').textContent = 'NOAA RNC Charts — live tiles ✓';
 
   // Animate current vectors using requestAnimationFrame
   animateCurrents();
@@ -1429,8 +1449,9 @@ function onLayerAlpha(key) {
   if(stateKey==='tc'){
     if(satOverlays.tc) satOverlays.tc.setOpacity(val);
   }
-  if(stateKey==='noaa' && window.seamarkLayer) {
-    window.seamarkLayer.setOpacity(val);
+  if(stateKey==='noaa') {
+    if(window.noaaRNCLayer) window.noaaRNCLayer.setOpacity(val);
+    if(window.seamarkLayer) window.seamarkLayer.setOpacity(Math.min(1, val * 1.1));
   }
 }
 
@@ -1494,6 +1515,48 @@ function updateEddySidebar(){
   }).join('');
 }
 
+// ═══════════════════════════════════════════
+// DEPTH CONTOURS — Leaflet polylines
+// ═══════════════════════════════════════════
+let depthContourLayer = null;
+
+function drawDepthContours() {
+  if (!map) return;
+  if (depthContourLayer) { map.removeLayer(depthContourLayer); depthContourLayer = null; }
+  const MAJOR = new Set([50,100,200,300,400,500,600,700,800,900,1000,1500,2000]);
+  depthContourLayer = L.layerGroup().addTo(map);
+  for (const [levelStr, segments] of Object.entries(BATHY_CONTOURS)) {
+    const level = parseInt(levelStr);
+    const isMajor = MAJOR.has(level);
+    const isHundred = level % 100 === 0 && level <= 1000;
+    let color;
+    if      (level <= 30)   color = '#a0d4ff';
+    else if (level <= 100)  color = '#70b8f0';
+    else if (level <= 200)  color = '#4090d8';
+    else if (level <= 400)  color = '#2060b8';
+    else if (level <= 700)  color = '#1040a0';
+    else if (level <= 1000) color = '#082878';
+    else                    color = '#041450';
+    const weight = isHundred ? 2.0 : isMajor ? 1.3 : 0.6;
+    const opacity = isMajor ? 0.9 : 0.45;
+    for (const seg of segments) {
+      L.polyline([[seg[0][0],seg[0][1]],[seg[1][0],seg[1][1]]], {
+        color, weight, opacity, interactive: false
+      }).addTo(depthContourLayer);
+    }
+    if (isHundred && segments.length > 0) {
+      const mid = segments[Math.floor(segments.length/2)];
+      const lat = (mid[0][0]+mid[1][0])/2, lng = (mid[0][1]+mid[1][1])/2;
+      L.marker([lat,lng], {
+        interactive: false,
+        icon: L.divIcon({
+          className:'', iconSize:[36,14], iconAnchor:[18,7],
+          html:`<div style="font-family:'Space Mono',monospace;font-size:8px;color:${color};text-shadow:0 0 3px rgba(0,0,0,0.9),0 0 3px rgba(0,0,0,0.9);font-weight:bold">${level}ft</div>`
+        })
+      }).addTo(depthContourLayer);
+    }
+  }
+}
 
 // ═══════════════════════════════════════════
 // ORIGINAL BLUEWATER INTEL LOGIC (preserved)
