@@ -14,6 +14,29 @@ exports.handler = async (event) => {
 
     if (type === 'ping') return { statusCode: 200, headers: CORS, body: JSON.stringify({ ok: true }) };
 
+    // AUTH — validate passcode against Netlify env var
+    if (type === 'auth') {
+      const { passcode } = payload;
+      const correct = process.env.VITE_APP_PASSCODE || process.env.APP_PASSCODE || '';
+      if (!correct) return { statusCode: 500, headers: CORS, body: JSON.stringify({ error: 'Passcode not configured' }) };
+      if (passcode === correct) {
+        // Return a simple session token (hash of passcode + day so it expires daily)
+        const day = new Date().toISOString().split('T')[0];
+        const token = Buffer.from(`${correct}:${day}`).toString('base64');
+        return { statusCode: 200, headers: CORS, body: JSON.stringify({ ok: true, token }) };
+      }
+      return { statusCode: 401, headers: CORS, body: JSON.stringify({ ok: false, error: 'Wrong passcode' }) };
+    }
+
+    // TOKEN CHECK — verify a stored session token
+    if (type === 'verify') {
+      const { token } = payload;
+      const correct = process.env.VITE_APP_PASSCODE || process.env.APP_PASSCODE || '';
+      const day = new Date().toISOString().split('T')[0];
+      const expected = Buffer.from(`${correct}:${day}`).toString('base64');
+      return { statusCode: 200, headers: CORS, body: JSON.stringify({ ok: token === expected }) };
+    }
+
     if (type === 'envcheck') {
       const key = process.env.ANTHROPIC_API_KEY || '';
       return { statusCode: 200, headers: CORS, body: JSON.stringify({ keySet: key.length > 0, keyPrefix: key.slice(0, 10) }) };
