@@ -1762,15 +1762,27 @@ function renderResults(data) {
     if(hs.lat&&hs.lng){ addHotspotMarker(hs, i); if(i===0) panTo(hs.lat,hs.lng); }
     const primarySp = SPECIES.find(s=>s.label===hs.primary_species);
     const spColor = primarySp?.color || c;
-    html+=`<div class="hs" style="border-left-color:${spColor}" onclick="panTo(${hs.lat},${hs.lng})">
-      <div style="display:flex;justify-content:space-between;align-items:flex-start">
-        <div class="hsn" style="color:${spColor}">${i+1}. ${hs.name}</div>
-        <div class="conf" style="color:${cc}">${hs.confidence}</div>
+    html+=`<div class="hs" style="border-left-color:${spColor};margin-bottom:10px" onclick="panTo(${hs.lat},${hs.lng})">
+
+      <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:4px">
+        <div class="hsn" style="color:${spColor};font-size:13px">${i+1}. ${hs.name}</div>
+        <div class="conf" style="color:${cc};font-size:9px">${hs.confidence}</div>
       </div>
-      ${hs.primary_species?`<div style="font-family:'Bebas Neue';font-size:12px;color:${spColor};letter-spacing:1px;margin-bottom:3px">${primarySp?.ico||'🎣'} ${hs.primary_species}</div>`:''}
-      <div class="hsl">📍 ${hs.location} ${hs.depth_target?`· ${hs.depth_target}`:''}<br>${hs.lat?.toFixed(4)}°N  ${Math.abs(hs.lng||0).toFixed(4)}°W</div>
-      <div class="hsw">${hs.why}</div>
-      <div class="hst">🎣 ${hs.technique}</div>
+
+      ${hs.primary_species?`<div style="font-family:'Bebas Neue';font-size:11px;color:${spColor};letter-spacing:1px;margin-bottom:5px">${primarySp?.ico||'🎣'} ${hs.primary_species} · ${hs.depth_target||''}</div>`:''}
+
+      <div class="hsl" style="margin-bottom:6px">📍 ${hs.location}<br>${hs.lat?.toFixed(4)}°N  ${Math.abs(hs.lng||0).toFixed(4)}°W</div>
+
+      <div style="background:#ffffff08;border:1px solid var(--border);border-left:2px solid ${spColor};border-radius:4px;padding:7px 9px;margin-bottom:6px">
+        <div style="font-family:'Bebas Neue';font-size:9px;letter-spacing:2px;color:${spColor};margin-bottom:3px">📊 WHY THIS SPOT</div>
+        <div style="font-size:10px;line-height:1.7;color:var(--text)">${hs.why}</div>
+      </div>
+
+      <div style="background:#f5a62308;border:1px solid #f5a62322;border-radius:4px;padding:6px 9px;margin-bottom:5px">
+        <div style="font-family:'Bebas Neue';font-size:9px;letter-spacing:2px;color:var(--warm);margin-bottom:2px">🎣 TECHNIQUE</div>
+        <div style="font-size:10px;line-height:1.6;color:var(--text)">${hs.technique}</div>
+      </div>
+
       <div class="tags">${(hs.species||[]).map(s=>`<span class="tag">${s}</span>`).join('')}</div>
     </div>`;
   });
@@ -3741,31 +3753,33 @@ async function runAIAnalysis() {
     systemPrompt = buildSystemPrompt(promptSpeciesId, region);
     userPrompt   = buildAnalysisPrompt({ speciesId: promptSpeciesId, region, bounds: { north:sb.north, south:sb.south, east:sb.east, west:sb.west }, sstData, chlorData: null, currentData, fronts: [], eddies, date: today, season, reportSignal, numHotspots: 4 });
   } else {
-    systemPrompt = `You are an expert offshore fishing guide for ${region.replace('_',' ')}. Analyze ONLY the ocean data provided — SST, currents, chlorophyll, and eddies — to identify hotspots. Do not use memorized or generic locations. Every analysis must reflect the specific data provided. Respond ONLY with valid JSON.`;
-    const spContext = selSp.map(s=>`${s.label}: SST ${s.sst[0]}–${s.sst[1]}°F, depth ${s.depth}. ${s.tip}`).join('\n');
-    const currentPts = currentGrid.slice(0,8).map(p=>`${p.lat.toFixed(3)}°N ${Math.abs(p.lng).toFixed(3)}°W: ${p.speed_kt.toFixed(2)}kt ${DIRS[Math.round(p.dir_deg/22.5)%16]}${p.sst_c ? ` SST:${(p.sst_c*9/5+32).toFixed(1)}°F` : ''}`).join('\n');
-    userPrompt = `Find 4 fishing hotspots for ${spNames} within this EXACT area.
+    systemPrompt = `You are a marine data analyst identifying fishing hotspots from sensor data. You have NO knowledge of named fishing locations — you derive every hotspot purely from the numerical ocean data provided. Never use names like "Juno Ledge", "Jupiter Inlet", "Palm Beach Reef" or any named location from memory. Every coordinate must come from interpolating the actual data points given. Respond ONLY with valid JSON.`;
+    const currentPts = currentGrid.slice(0,8).map(p=>`  ${p.lat.toFixed(4)}°N, ${p.lng.toFixed(4)}°W → ${p.speed_kt.toFixed(2)}kt ${DIRS[Math.round(p.dir_deg/22.5)%16]}${p.sst_c ? ` | SST ${(p.sst_c*9/5+32).toFixed(1)}°F` : ''}`).join('\n');
+    userPrompt = `OCEAN DATA ANALYSIS — identify 4 fishing hotspots for ${spNames}.
 
-Lat: ${sb.south.toFixed(4)}–${sb.north.toFixed(4)}°N
-Lng: ${sb.west.toFixed(4)}–${sb.east.toFixed(4)}°W (west to east, more negative = further west)
+SEARCH AREA:
+  Lat: ${sb.south.toFixed(4)} to ${sb.north.toFixed(4)}°N
+  Lng: ${sb.west.toFixed(4)} to ${sb.east.toFixed(4)} (negative = west longitude)
+  Center: ${sb.centerLat.toFixed(4)}°N, ${sb.centerLng.toFixed(4)}
 
-HARD CONSTRAINT: Every hotspot lat MUST be between ${sb.south.toFixed(4)} and ${sb.north.toFixed(4)}. Every hotspot lng MUST be between ${sb.west.toFixed(4)} and ${sb.east.toFixed(4)} (i.e. lng >= ${sb.west.toFixed(4)} AND lng <= ${sb.east.toFixed(4)}).
-
-Month: ${month}. Season: ${season}. Region: ${region.replace('_',' ')}.
-
-LIVE CURRENT DATA (use these exact coordinates as your starting points):
+LIVE CURRENT SENSOR READINGS:
 ${currentPts}
 
 ${eddyContext}
 Satellite: ${satContext}
-Current summary: ${curSummaryTxt}
 
-Species: ${spContext}
+Month: ${month}. Season: ${season}. Species target: ${spNames}.
+${selSp.map(s=>`${s.label}: depth ${s.depth}, SST ${s.sst[0]}–${s.sst[1]}°F. ${s.tip}`).join('\n')}
 
-BASE EVERY HOTSPOT on the actual current data points above. Reference specific lat/lon from the data. Explain SST gradient, current speed/direction, or eddy proximity for each spot. Do NOT use generic named locations — derive spots from the data.
+RULES:
+1. Place hotspots at coordinates derived from the sensor readings above — interpolate between them
+2. Do NOT use any named reef, ledge, or inlet from memory — name spots by their oceanographic feature instead (e.g. "Current shear zone", "SST break at 78.4°F", "Upwelling eddy edge")
+3. lat must be between ${sb.south.toFixed(4)} and ${sb.north.toFixed(4)}
+4. lng must be between ${sb.west.toFixed(4)} and ${sb.east.toFixed(4)}
+5. Each spot must have a different lat/lng
 
 Respond ONLY with valid JSON:
-{"overall":"...","conditions_rating":"Excellent|Good|Fair|Poor","avg_current_kt":"${avgSpd}","dominant_flow":"${domDir}","hotspots":[{"name":"...","location":"X miles bearing from nearest inlet","lat":0.0000,"lng":0.0000,"why":"cite specific current speed, SST, or eddy from the data above","species":["${spNames}"],"primary_species":"${spNames}","technique":"...","confidence":"High|Medium|Low","depth_target":"..."}],"pro_tip":"..."}`;
+{"overall":"...","conditions_rating":"Excellent|Good|Fair|Poor","avg_current_kt":"${avgSpd}","dominant_flow":"${domDir}","hotspots":[{"name":"oceanographic feature name only","location":"bearing and distance from center point","lat":0.0000,"lng":0.0000,"why":"2-3 sentences citing specific values from the sensor data — e.g. current speed at this coordinate, SST value, proximity to eddy, gradient strength. Explain exactly what oceanic condition makes this a hotspot and why ${spNames} will be there.","species":["${spNames}"],"primary_species":"${spNames}","technique":"specific rigging and method for these exact conditions","confidence":"High|Medium|Low","depth_target":"..."}],"pro_tip":"one tactical tip based on today's specific data"}`;
   }
 
   // Update loading display
@@ -3790,17 +3804,13 @@ Respond ONLY with valid JSON:
     const rawHs = parsed.hotspots || [];
     console.log('Search bounds:', sb.south.toFixed(4), sb.north.toFixed(4), sb.west.toFixed(4), sb.east.toFixed(4));
     console.log('Claude returned hotspots:', rawHs.map(h => `${h.name}: ${h.lat}, ${h.lng ?? h.lon}`));
-    // Normalise — speciesPrompts uses 'lon', fallback prompt uses 'lng'
+    // Normalise lon→lng (speciesPrompts uses 'lon', fallback uses 'lng')
     rawHs.forEach(hs => { if (hs.lon !== undefined && hs.lng === undefined) hs.lng = hs.lon; });
-    const buf = 0.15; // ~10mi tolerance buffer
+    // Always show all hotspots — the map will pan to them regardless
     hotspots = rawHs.filter(hs => {
       const lat = parseFloat(hs.lat), lng = parseFloat(hs.lng);
-      if (isNaN(lat)||isNaN(lng)) return false;
-      const inBounds = lat>=(sb.south-buf) && lat<=(sb.north+buf) && lng>=(sb.west-buf) && lng<=(sb.east+buf);
-      if (!inBounds) console.warn('Hotspot outside bounds, dropped:', hs.name, lat, lng);
-      return inBounds;
+      return !isNaN(lat) && !isNaN(lng);
     });
-    if (!hotspots.length && rawHs.length) { console.warn('All hotspots outside bounds — showing anyway'); hotspots = rawHs; }
     renderResults(parsed);
   } catch(e) {
     document.getElementById('aibody').innerHTML = `<div class="aimt"><div class="aimt-ico">⚠️</div><div class="aimt-txt">Analysis failed:<br><small style="color:var(--muted)">${e.message}</small><br><br><button onclick="clearAnalysisPin()" style="padding:6px 14px;border-radius:5px;border:1px solid var(--teal);background:transparent;color:var(--teal);font-family:'Space Mono';font-size:9px;cursor:pointer">↩ Try Again</button></div></div>`;
