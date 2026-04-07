@@ -635,27 +635,6 @@ input[type=range].rng.sst-rng::-moz-range-thumb{background:var(--hot);}
 
     <div class="sb-sec">
       <div class="sb-ttl" style="margin-bottom:7px">Live Currents</div>
-
-      <!-- Pin drop instruction -->
-      <div id="pin-instruction" style="font-family:'Space Mono';font-size:8px;color:var(--warm);background:#f5a62312;border:1px solid #f5a62344;border-radius:5px;padding:6px 8px;margin-bottom:7px;line-height:1.6">
-        📍 <strong>Click map to drop analysis pin</strong><br>
-        <span style="color:var(--muted)">Currents fetch within radius only</span>
-      </div>
-
-      <!-- Pin status + clear -->
-      <div id="pin-status" style="display:none;margin-bottom:7px">
-        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:5px">
-          <span style="font-family:'Space Mono';font-size:8px;color:var(--teal)" id="pin-coords">—</span>
-          <button onclick="clearAnalysisPin()" style="font-family:'Space Mono';font-size:8px;color:var(--muted);background:transparent;border:1px solid var(--border);border-radius:3px;padding:2px 6px;cursor:pointer">✕ Clear</button>
-        </div>
-        <div style="display:flex;align-items:center;gap:6px">
-          <span style="font-family:'Space Mono';font-size:8px;color:var(--muted);white-space:nowrap">Radius</span>
-          <input type="range" class="rng" id="pin-radius" min="10" max="150" step="5" value="50" oninput="onPinRadiusChange()">
-          <span class="rng-vals" id="pin-radius-lbl" style="white-space:nowrap">50mi</span>
-        </div>
-        <button onclick="fetchCurrentData()" style="width:100%;margin-top:6px;padding:5px;border-radius:4px;border:1px solid var(--teal);background:var(--teal2);color:var(--teal);font-family:'Space Mono';font-size:8px;cursor:pointer">⟳ Fetch Currents in Radius</button>
-      </div>
-
       <div style="display:flex;flex-wrap:wrap;gap:3px;margin-bottom:7px" id="cur-src-btns">
         <button class="src-btn active" id="cursrc-openmeteo"  onclick="setCurSource('openmeteo')">Open-Meteo</button>
         <button class="src-btn"        id="cursrc-oscar"      onclick="setCurSource('oscar')">OSCAR NRT</button>
@@ -863,6 +842,20 @@ input[type=range].rng.sst-rng::-moz-range-thumb{background:var(--hot);}
 
     <!-- Measure banner -->
     <div id="measure-banner">📏 MEASURE MODE — Click first point</div>
+
+    <!-- Pin drop banner — shown during analyze flow step 2 -->
+    <div id="pin-banner" style="display:none;position:absolute;top:54px;left:50%;transform:translateX(-50%);z-index:1100;background:var(--warm);color:var(--deep);border-radius:6px;padding:8px 20px;font-family:'Bebas Neue';font-size:16px;letter-spacing:2px;pointer-events:none;white-space:nowrap;box-shadow:0 2px 16px #f5a62355">
+      📍 CLICK MAP TO SET SEARCH AREA
+    </div>
+
+    <!-- Radius control — appears after pin is dropped -->
+    <div id="pin-radius-bar" style="display:none;position:absolute;bottom:70px;left:50%;transform:translateX(-50%);z-index:1100;background:var(--panel2);border:1px solid var(--warm);border-radius:8px;padding:10px 16px;backdrop-filter:blur(10px);display:none;align-items:center;gap:10px;white-space:nowrap">
+      <span style="font-family:'Space Mono';font-size:9px;color:var(--warm)">📍 SEARCH RADIUS</span>
+      <input type="range" class="rng" id="pin-radius" min="10" max="150" step="5" value="50" oninput="onPinRadiusChange()" style="width:120px">
+      <span class="rng-vals" id="pin-radius-lbl">50mi</span>
+      <button onclick="clearAnalysisPin()" style="font-family:'Space Mono';font-size:8px;color:var(--muted);background:transparent;border:1px solid var(--border);border-radius:3px;padding:3px 8px;cursor:pointer">✕</button>
+      <button id="confirm-pin-btn" onclick="confirmPinAndFetch()" style="font-family:'Bebas Neue';font-size:14px;letter-spacing:1px;color:var(--deep);background:var(--teal);border:none;border-radius:5px;padding:5px 14px;cursor:pointer">CONFIRM →</button>
+    </div>
 
     <!-- Spot data popup -->
     <div id="spot-popup">
@@ -1128,8 +1121,7 @@ function initLeafletMap() {
       openSpotPopup(lat, lng, e.containerPoint.x, e.containerPoint.y);
     } else if (mapMode === 'measure') {
       handleMeasureClick(lat, lng);
-    } else {
-      // Default pan mode — drop analysis pin
+    } else if (analysisFlowActive) {
       dropAnalysisPin(lat, lng);
     }
   });
@@ -1678,13 +1670,7 @@ function toggleSat(key) {
 
 function toggleLayer(key) {
   layers[key] = !layers[key];
-  if (layers[key] && key === 'cur' && !currentGrid.length) {
-    if (!analysisPin) {
-      setDS('idle', 'Drop a pin on the map to fetch currents');
-    } else {
-      fetchCurrentData();
-    }
-  }
+  if (layers[key] && key === 'cur' && !currentGrid.length) fetchCurrentData();
   if (layers[key] && key === 'me') {
     const hasCurData = currentGrid.length >= 6;
     const hasSatData = (satLayers.chl && satCache.chl.img) || (satLayers.sst && satCache.sst.img);
@@ -3248,18 +3234,15 @@ async function fetchCurrents_CMEMS(pts, dataset) {
 }
 
 async function fetchCurrentData() {
-  if (!analysisPin) {
-    setDS('err', 'Drop a pin on the map first');
-    return;
-  }
   setDS('loading', `Loading ${CUR_SOURCES[activeCurSrc].label}...`); setFill(0);
   currentGrid = []; document.getElementById('cur-readings').innerHTML = '';
 
-  // Build pin-radius grid — tight circle around the dropped pin
   const spacing = activeCurSrc === 'openmeteo' ? 0.10 :
                   activeCurSrc === 'oscar'      ? 0.15 :
                   activeCurSrc === 'cmems'      ? 0.08 : 0.10;
-  const pts = buildPinGrid(spacing);
+
+  // Use pin grid if a pin is set, otherwise fall back to viewport grid
+  const pts = analysisPin ? buildPinGrid(spacing) : buildViewportGrid(spacing);
 
   if (!pts.length) { setDS('err', 'No points in view'); return; }
 
@@ -3602,36 +3585,137 @@ function getSearchBounds(){
 }
 
 // ═══════════════════════════════════════════
-// AI ANALYSIS — V2 (species prompts + report signal)
+// ANALYSIS PIN + FLOW STATE
+// ═══════════════════════════════════════════
+let analysisPin = null;
+let analysisPinMarker = null;
+let analysisPinCircle = null;
+let analysisFlowActive = false; // true while waiting for pin drop
+
+function dropAnalysisPin(lat, lng) {
+  if (!analysisFlowActive) return; // only drop pin during analyze flow
+
+  analysisPin = { lat, lng };
+
+  // Remove old marker/circle
+  if (analysisPinMarker) { map.removeLayer(analysisPinMarker); analysisPinMarker = null; }
+  if (analysisPinCircle) { map.removeLayer(analysisPinCircle); analysisPinCircle = null; }
+
+  const radiusMi = parseInt(document.getElementById('pin-radius')?.value || 50);
+  const radiusM  = radiusMi * 1609.34;
+
+  // Orange glowing pin
+  const icon = L.divIcon({
+    className: '',
+    iconSize: [20, 28],
+    iconAnchor: [10, 28],
+    html: `<div style="width:16px;height:16px;border-radius:50% 50% 50% 0;background:var(--warm);border:2px solid #fff;transform:rotate(-45deg);box-shadow:0 0 14px #f5a62388;margin:2px"></div>`
+  });
+  analysisPinMarker = L.marker([lat, lng], { icon, zIndexOffset: 1000, interactive: false }).addTo(map);
+
+  // Dashed radius circle
+  analysisPinCircle = L.circle([lat, lng], {
+    radius: radiusM,
+    color: '#f5a623',
+    fillColor: '#f5a623',
+    fillOpacity: 0.07,
+    weight: 2,
+    dashArray: '8 5',
+    interactive: false
+  }).addTo(map);
+
+  // Hide drop banner, show radius bar
+  document.getElementById('pin-banner').style.display = 'none';
+  const bar = document.getElementById('pin-radius-bar');
+  bar.style.display = 'flex';
+}
+
+function onPinRadiusChange() {
+  const radiusMi = parseInt(document.getElementById('pin-radius').value);
+  document.getElementById('pin-radius-lbl').textContent = radiusMi + 'mi';
+  if (!analysisPin || !analysisPinCircle) return;
+  analysisPinCircle.setRadius(radiusMi * 1609.34);
+}
+
+function clearAnalysisPin() {
+  analysisPin = null;
+  analysisFlowActive = false;
+  if (analysisPinMarker) { map.removeLayer(analysisPinMarker); analysisPinMarker = null; }
+  if (analysisPinCircle) { map.removeLayer(analysisPinCircle); analysisPinCircle = null; }
+  document.getElementById('pin-banner').style.display = 'none';
+  document.getElementById('pin-radius-bar').style.display = 'none';
+  map.getContainer().style.cursor = '';
+  // Reset analyze button
+  const btn = document.getElementById('abtn');
+  btn.disabled = false;
+  updateAnalyzeBtn();
+  // Reset aibody
+  document.getElementById('aibody').innerHTML = `<div class="aimt"><div class="aimt-ico">🛰️</div><div class="aimt-txt">Select species and hit <strong>ANALYZE WITH AI</strong> to begin.</div></div>`;
+}
+
+// Step 3 — user clicks CONFIRM after adjusting radius
+async function confirmPinAndFetch() {
+  if (!analysisPin) return;
+
+  document.getElementById('pin-radius-bar').style.display = 'none';
+  map.getContainer().style.cursor = '';
+  analysisFlowActive = false;
+
+  // Show loading state in AI panel
+  document.getElementById('aibody').innerHTML = `<div style="padding:14px">
+    <div class="ldstep"><div class="spin"></div>Fetching currents within ${document.getElementById('pin-radius-lbl').textContent}...</div>
+    <div class="ldb"><div class="ldf"></div></div>
+    <div class="ldstep" style="opacity:.4"><div class="spin"></div>Reading satellite data...</div>
+    <div class="ldb"><div class="ldf" style="animation-delay:.5s"></div></div>
+    <div class="ldstep" style="opacity:.4"><div class="spin"></div>Claude identifying hotspots...</div>
+    <div class="ldb"><div class="ldf" style="animation-delay:1s"></div></div>
+  </div>`;
+
+  // Step 3a — fetch currents within the pin radius
+  await fetchCurrentData();
+
+  // Step 3b — check we got current data
+  if (!currentGrid.length) {
+    document.getElementById('aibody').innerHTML = `<div class="aimt"><div class="aimt-ico">⚠️</div><div class="aimt-txt">Could not fetch current data.<br><small style="color:var(--muted)">Try a different current source or move the pin closer to shore.</small><br><br><button onclick="clearAnalysisPin()" style="padding:6px 14px;border-radius:5px;border:1px solid var(--teal);background:transparent;color:var(--teal);font-family:'Space Mono';font-size:9px;cursor:pointer">↩ Start Over</button></div></div>`;
+    const btn = document.getElementById('abtn');
+    btn.disabled = false; updateAnalyzeBtn();
+    return;
+  }
+
+  // Step 3c — currents live, update loading display
+  document.getElementById('aibody').innerHTML = `<div style="padding:14px">
+    <div class="ldstep" style="color:var(--bait)">✓ Currents live — ${currentGrid.length} pts</div>
+    <div class="ldb"><div class="ldf" style="width:100%;animation:none;background:var(--bait)"></div></div>
+    <div class="ldstep"><div class="spin"></div>Reading satellite data...</div>
+    <div class="ldb"><div class="ldf" style="animation-delay:.2s"></div></div>
+    <div class="ldstep" style="opacity:.4"><div class="spin"></div>Claude identifying hotspots...</div>
+    <div class="ldb"><div class="ldf" style="animation-delay:.8s"></div></div>
+  </div>`;
+
+  // Step 3d — run AI analysis
+  await runAIAnalysis();
+}
+
+// ═══════════════════════════════════════════
+// AI ANALYSIS — V2
 // ═══════════════════════════════════════════
 
-// Species ID map — maps SPECIES array ids to speciesPrompts.js library IDs
 const SPECIES_PROMPT_MAP = {
-  blue_marlin:  'BLUE_MARLIN',
-  white_marlin: 'WHITE_MARLIN',
-  sailfish:     'SAILFISH',
-  swordfish:    'SWORDFISH',
-  mahi:         'MAHI',
-  dolphin:      'MAHI',
-  wahoo:        'WAHOO',
-  yellowfin:    'YELLOWFIN_TUNA',
-  blackfin:     'BLACKFIN_TUNA',
-  kingfish:     'KINGFISH',
-  cobia:        'SNAPPER_GROUPER',
-  tripletail:   'SNAPPER_GROUPER',
+  blue_marlin:'BLUE_MARLIN', white_marlin:'WHITE_MARLIN', sailfish:'SAILFISH',
+  swordfish:'SWORDFISH', mahi:'MAHI', dolphin:'MAHI', wahoo:'WAHOO',
+  yellowfin:'YELLOWFIN_TUNA', blackfin:'BLACKFIN_TUNA', kingfish:'KINGFISH',
+  cobia:'SNAPPER_GROUPER', tripletail:'SNAPPER_GROUPER',
 };
 
-// Detect region from map center latitude
 function detectRegionFromMap() {
-  const b = getViewBounds();
-  const lat = (b.south + b.north) / 2;
+  if (!analysisPin) return 'SE_FLORIDA';
+  const lat = analysisPin.lat;
   if (lat >= 24.5 && lat < 29.5) return 'SE_FLORIDA';
   if (lat >= 29.5 && lat < 37.5) return 'MID_ATLANTIC';
   if (lat >= 37.5) return 'NORTHEAST';
   return 'SE_FLORIDA';
 }
 
-// Get current season string
 function getCurrentSeason() {
   const m = new Date().getMonth() + 1;
   if (m >= 3 && m <= 5) return 'spring';
@@ -3640,18 +3724,14 @@ function getCurrentSeason() {
   return 'winter';
 }
 
-// Build SST summary from current grid data
 function buildSSTSummary() {
   const sstPts = currentGrid.filter(p => p.sst_c != null);
   if (!sstPts.length) return null;
-  const vals = sstPts.map(p => p.sst_c * 9/5 + 32); // C to F
+  const vals = sstPts.map(p => p.sst_c * 9/5 + 32);
   const avg = vals.reduce((a,b)=>a+b,0)/vals.length;
-  const min = Math.min(...vals), max = Math.max(...vals);
-  const gradient = (max - min) / Math.max(1, vals.length * 0.1);
-  return { avg: parseFloat(avg.toFixed(1)), min: parseFloat(min.toFixed(1)), max: parseFloat(max.toFixed(1)), gradient: parseFloat(gradient.toFixed(2)) };
+  return { avg: parseFloat(avg.toFixed(1)), min: parseFloat(Math.min(...vals).toFixed(1)), max: parseFloat(Math.max(...vals).toFixed(1)), gradient: parseFloat(((Math.max(...vals)-Math.min(...vals))/Math.max(1,vals.length*0.1)).toFixed(2)) };
 }
 
-// Build current summary object for prompt
 function buildCurrentSummary() {
   if (!currentGrid.length) return null;
   const speeds = currentGrid.map(p => p.speed_kt);
@@ -3662,164 +3742,120 @@ function buildCurrentSummary() {
   return { speed_kt: parseFloat(avgSpd.toFixed(2)), dir_deg: dir, source: activeCurSrc || 'unknown' };
 }
 
-// Build eddy list for prompt
 function buildEddySummary() {
-  return detectedEddies.map(e => ({
-    description: `${e.sense} eddy @${e.lat.toFixed(3)}N/${Math.abs(e.lng).toFixed(3)}W ~${(e.radius_deg*69).toFixed(0)}mi ${e.sense==='CCW'?'cyclonic/upwelling':'anticyclonic/warm-core'}`
-  }));
+  return detectedEddies.map(e => ({ description: `${e.sense} eddy @${e.lat.toFixed(3)}N/${Math.abs(e.lng).toFixed(3)}W ~${(e.radius_deg*69).toFixed(0)}mi ${e.sense==='CCW'?'cyclonic/upwelling':'anticyclonic/warm-core'}` }));
 }
 
-async function runAnalysis(){
-  const btn=document.getElementById('abtn');
-  btn.disabled=true; btn.textContent='⏳ ANALYZING...';
-  hotspots=[];
-  document.getElementById('aibody').innerHTML=`<div style="padding:14px">
-    <div class="ldstep"><div class="spin"></div>Fetching recent fishing reports...</div>
-    <div class="ldb"><div class="ldf"></div></div>
-    <div class="ldstep"><div class="spin"></div>Reading satellite & current data...</div>
-    <div class="ldb"><div class="ldf" style="animation-delay:.5s"></div></div>
-    <div class="ldstep"><div class="spin"></div>Claude identifying hotspots...</div>
-    <div class="ldb"><div class="ldf" style="animation-delay:1s"></div></div>
-  </div>`;
-
-  // Guard: need at least one species
-  if(selectedSpecies.size===0){
-    document.getElementById('aibody').innerHTML=`<div class="aimt"><div class="aimt-ico">🎣</div><div class="aimt-txt">Select at least one target species above, then hit Analyze.</div></div>`;
-    btn.disabled=false; btn.textContent='🎯 SELECT A SPECIES'; return;
+// Step 1 — user hits ANALYZE button
+function runAnalysis() {
+  if (selectedSpecies.size === 0) {
+    document.getElementById('aibody').innerHTML = `<div class="aimt"><div class="aimt-ico">🎣</div><div class="aimt-txt">Select at least one target species above, then hit Analyze.</div></div>`;
+    return;
   }
 
-  // Pick the primary species for the prompt (first selected)
+  const btn = document.getElementById('abtn');
+  btn.disabled = true;
+  btn.textContent = '📍 CLICK MAP TO SET AREA';
+
+  // Enter pin-drop mode
+  analysisFlowActive = true;
+  clearAnalysisPin(); // clear any existing pin first
+  analysisFlowActive = true; // re-set after clear
+
+  // Show drop banner on map
+  document.getElementById('pin-banner').style.display = 'block';
+  map.getContainer().style.cursor = 'crosshair';
+
+  // Show instruction in AI panel
+  document.getElementById('aibody').innerHTML = `<div class="aimt">
+    <div class="aimt-ico">📍</div>
+    <div class="aimt-txt">
+      <strong style="color:var(--warm)">Click the map</strong> to drop your search pin.<br><br>
+      A circle will appear — adjust the radius, then hit <strong style="color:var(--teal)">CONFIRM</strong> to fetch currents and run the analysis.
+    </div>
+  </div>`;
+}
+
+// Step 2 (internal) — called after currents fetched, runs the actual AI call
+async function runAIAnalysis() {
+  const btn = document.getElementById('abtn');
+  const region  = detectRegionFromMap();
+  const season  = getCurrentSeason();
+  const sb      = getSearchBounds();
+  const today   = new Date().toISOString().slice(0, 10);
+  const month   = ['January','February','March','April','May','June','July','August','September','October','November','December'][new Date().getMonth()];
+
   const primarySpeciesId = [...selectedSpecies][0];
-  const promptSpeciesId = SPECIES_PROMPT_MAP[primarySpeciesId] || 'SAILFISH';
-  const region = detectRegionFromMap();
-  const season = getCurrentSeason();
-  const sb = getSearchBounds();
-  const today = new Date().toISOString().slice(0, 10);
-  const month = ['January','February','March','April','May','June','July','August','September','October','November','December'][new Date().getMonth()];
+  const promptSpeciesId  = SPECIES_PROMPT_MAP[primarySpeciesId] || 'SAILFISH';
+  const selSp  = SPECIES.filter(s => selectedSpecies.has(s.id));
+  const spNames = selSp.map(s => s.label).join(', ');
 
-  // ── Run fishing report fetch and build local data summaries in parallel ──
-  const [reportResult] = await Promise.allSettled([
-    fetch('/.netlify/functions/fishing-reports', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        species: SPECIES.find(s=>s.id===primarySpeciesId)?.label || primarySpeciesId,
-        region,
-        location: `${region.replace('_',' ')} offshore`,
-        date: today
-      })
-    }).then(r => r.json())
-  ]);
-
-  const reportSignal = reportResult.status === 'fulfilled' ? reportResult.value?.signal : null;
-
-  // ── Build ocean data summaries ──
+  const DIRS = ['N','NNE','NE','ENE','E','ESE','SE','SSE','S','SSW','SW','WSW','W','WNW','NW','NNW'];
   const sstData     = buildSSTSummary();
   const currentData = buildCurrentSummary();
   const eddies      = buildEddySummary();
 
-  // Current summary for prompt (legacy format kept for existing context block)
-  const DIRS=['N','NNE','NE','ENE','E','ESE','SE','SSE','S','SSW','SW','WSW','W','WNW','NW','NNW'];
-  let avgSpd='0', domDir='NNE';
-  if(currentGrid.length>0){
-    avgSpd = (currentGrid.map(p=>p.speed_kt).reduce((a,b)=>a+b,0)/currentGrid.length).toFixed(2);
-    const aU=currentGrid.reduce((s,p)=>s+p.u,0)/currentGrid.length;
-    const aV=currentGrid.reduce((s,p)=>s+p.v,0)/currentGrid.length;
-    const deg=Math.round((Math.atan2(aU,aV)*180/Math.PI+360)%360);
-    domDir=DIRS[Math.round(deg/22.5)%16];
-  }
+  let avgSpd = currentData ? currentData.speed_kt.toFixed(2) : '0';
+  let domDir = currentData ? DIRS[Math.round(currentData.dir_deg/22.5)%16] : 'NNE';
 
-  const selSp = SPECIES.filter(s=>selectedSpecies.has(s.id));
-  const spNames = selSp.map(s=>s.label).join(', ');
-  const satContext=`NASA/CoastWatch satellite imagery (${selectedDate}): Chlorophyll source: ${CHL_SOURCES[activeChlSrc]?.label||'NOAA-20'} (${CHL_SOURCES[activeChlSrc]?.res||'1km'}). MUR SST daily gap-filled.`;
-  const curSummaryTxt = currentData
-    ? `Source: ${currentData.source} — avg ${currentData.speed_kt}kt flowing ${DIRS[Math.round(currentData.dir_deg/22.5)%16]}`
-    : 'No live current data.';
-  const eddyContext = eddies.length>0
-    ? 'EDDIES: '+eddies.map(e=>e.description).join('; ')
-    : 'No significant eddies detected.';
+  const satContext = `NASA/CoastWatch satellite imagery (${selectedDate}): Chlorophyll source: ${CHL_SOURCES[activeChlSrc]?.label||'NOAA-20'} (${CHL_SOURCES[activeChlSrc]?.res||'1km'}). MUR SST daily gap-filled.`;
+  const curSummaryTxt = currentData ? `Source: ${currentData.source} — avg ${currentData.speed_kt}kt flowing ${DIRS[Math.round(currentData.dir_deg/22.5)%16]}` : 'No current data.';
+  const eddyContext = eddies.length > 0 ? 'EDDIES: ' + eddies.map(e=>e.description).join('; ') : 'No eddies detected.';
 
-  // ── Build the V2 system prompt using speciesPrompts library ──
-  // (imported via speciesPrompts.js — buildSystemPrompt / buildAnalysisPrompt)
+  // Fetch report signal in parallel with prompt build
+  const [reportResult] = await Promise.allSettled([
+    fetch('/.netlify/functions/fishing-reports', {
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({ species: selSp[0]?.label || primarySpeciesId, region, location: `${region.replace('_',' ')} offshore`, date: today })
+    }).then(r=>r.json())
+  ]);
+  const reportSignal = reportResult.status === 'fulfilled' ? reportResult.value?.signal : null;
+
   let systemPrompt, userPrompt;
-
-  if(typeof buildSystemPrompt === 'function') {
-    // V2 path — use species prompt library
+  if (typeof buildSystemPrompt === 'function') {
     systemPrompt = buildSystemPrompt(promptSpeciesId, region);
-    userPrompt = buildAnalysisPrompt({
-      speciesId:   promptSpeciesId,
-      region,
-      bounds: { north: sb.north, south: sb.south, east: sb.east, west: sb.west },
-      sstData,
-      chlorData:   null, // chlorophyll pixel values not extracted to numbers yet
-      currentData,
-      fronts:      [],
-      eddies,
-      date:        today,
-      season,
-      reportSignal,
-      numHotspots: 4
-    });
+    userPrompt   = buildAnalysisPrompt({ speciesId: promptSpeciesId, region, bounds: { north:sb.north, south:sb.south, east:sb.east, west:sb.west }, sstData, chlorData: null, currentData, fronts: [], eddies, date: today, season, reportSignal, numHotspots: 4 });
   } else {
-    // Fallback — original prompt if speciesPrompts.js not loaded
-    systemPrompt = `You are an expert offshore fishing guide for ${region.replace('_',' ')}. You MUST respond with only valid JSON and nothing else.`;
-    const boundsDesc = `SEARCH AREA: ${sb.label}.
-Lat bounds: ${sb.south.toFixed(4)}°N to ${sb.north.toFixed(4)}°N
-Lng bounds: ${sb.west.toFixed(4)}°W to ${sb.east.toFixed(4)}°W
-Center: ${sb.centerLat.toFixed(4)}°N, ${Math.abs(sb.centerLng).toFixed(4)}°W
-HARD CONSTRAINT: Every single hotspot lat/lng coordinate MUST fall within these exact bounds. Check each coordinate before including it.`;
+    systemPrompt = `You are an expert offshore fishing guide for ${region.replace('_',' ')}. Respond ONLY with valid JSON.`;
     const spContext = selSp.map(s=>`${s.label}: SST ${s.sst[0]}–${s.sst[1]}°F, depth ${s.depth}. ${s.tip}`).join('\n');
-    userPrompt = `Find 4 fishing hotspots for ${spNames} within this EXACT search area.
-
-${boundsDesc}
-
-Month: ${month}. Region: ${region.replace('_',' ')}.
-Satellite: ${satContext}
-Currents: ${curSummaryTxt}
-${eddyContext}
-
-Species profiles:
-${spContext}
-
-CRITICAL RULES:
-- Every hotspot lat MUST be between ${sb.south.toFixed(4)} and ${sb.north.toFixed(4)}
-- Every hotspot lng MUST be between ${sb.west.toFixed(4)} and ${sb.east.toFixed(4)}
-- Place spots at realistic fishing depths for each species
-- Do NOT place spots on land
-
-Respond ONLY with this exact JSON structure, no other text:
-{"overall":"2-3 sentence conditions summary","conditions_rating":"Excellent|Good|Fair|Poor","avg_current_kt":"${avgSpd}","dominant_flow":"${domDir}","hotspots":[{"name":"specific location name","location":"X miles bearing from nearest inlet","lat":0.0000,"lng":0.0000,"why":"reason citing satellite and current data","species":["species name"],"primary_species":"species name","technique":"specific fishing method","confidence":"High|Medium|Low","depth_target":"depth range"}],"pro_tip":"one actionable tip for today"}`;
+    userPrompt = `Find 4 fishing hotspots for ${spNames} within this EXACT area.\n\nLat: ${sb.south.toFixed(4)}–${sb.north.toFixed(4)}°N\nLng: ${sb.west.toFixed(4)}–${sb.east.toFixed(4)}°W\nCenter: ${sb.centerLat.toFixed(4)}°N, ${Math.abs(sb.centerLng).toFixed(4)}°W\n\nCRITICAL: Every hotspot lat MUST be between ${sb.south.toFixed(4)} and ${sb.north.toFixed(4)}. Every hotspot lng MUST be between ${sb.west.toFixed(4)} and ${sb.east.toFixed(4)}.\n\nMonth: ${month}. Season: ${season}.\nSatellite: ${satContext}\nCurrents: ${curSummaryTxt}\n${eddyContext}\n\nSpecies:\n${spContext}\n\nRespond ONLY with valid JSON:\n{"overall":"...","conditions_rating":"Excellent|Good|Fair|Poor","avg_current_kt":"${avgSpd}","dominant_flow":"${domDir}","hotspots":[{"name":"...","location":"X miles bearing from nearest inlet","lat":0.0000,"lng":0.0000,"why":"...","species":["${spNames}"],"primary_species":"${spNames}","technique":"...","confidence":"High|Medium|Low","depth_target":"..."}],"pro_tip":"..."}`;
   }
 
-  try{
-    // Route through the serverside claude.js function (keeps API key off client)
+  // Update loading display
+  document.getElementById('aibody').innerHTML = `<div style="padding:14px">
+    <div class="ldstep" style="color:var(--bait)">✓ Currents live — ${currentGrid.length} pts</div>
+    <div class="ldb"><div class="ldf" style="width:100%;animation:none;background:var(--bait)"></div></div>
+    <div class="ldstep" style="color:var(--bait)">✓ Satellite data ready</div>
+    <div class="ldb"><div class="ldf" style="width:100%;animation:none;background:var(--bait)"></div></div>
+    <div class="ldstep"><div class="spin"></div>Claude identifying hotspots for ${spNames}...</div>
+    <div class="ldb"><div class="ldf"></div></div>
+  </div>`;
+
+  try {
     const res = await fetch('/.netlify/functions/claude', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ type: 'analyze', prompt: userPrompt, system: systemPrompt })
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({ type:'analyze', prompt: userPrompt, system: systemPrompt })
     });
-    if(!res.ok){ const e=await res.json(); throw new Error(e.error||`HTTP ${res.status}`); }
-    const data = await res.json();
+    if (!res.ok) { const e = await res.json(); throw new Error(e.error || `HTTP ${res.status}`); }
+    const data   = await res.json();
     const parsed = JSON.parse(data.content.map(i=>i.text||'').join('').replace(/```json|```/g,'').trim());
 
-    // Clamp hotspots to search bounds
-    const rawHs = parsed.hotspots||[];
+    const rawHs = parsed.hotspots || [];
     hotspots = rawHs.filter(hs => {
-      const lat=parseFloat(hs.lat), lng=parseFloat(hs.lng);
-      if(isNaN(lat)||isNaN(lng)) return false;
+      const lat = parseFloat(hs.lat), lng = parseFloat(hs.lng);
+      if (isNaN(lat)||isNaN(lng)) return false;
       const inBounds = lat>=sb.south && lat<=sb.north && lng>=sb.west && lng<=sb.east;
-      if(!inBounds) console.warn('Hotspot outside bounds, dropped:', hs.name, lat, lng);
+      if (!inBounds) console.warn('Hotspot outside bounds, dropped:', hs.name, lat, lng);
       return inBounds;
     });
-    if(!hotspots.length && rawHs.length){
-      console.warn('All hotspots outside bounds — showing anyway');
-      hotspots = rawHs;
-    }
+    if (!hotspots.length && rawHs.length) { console.warn('All hotspots outside bounds — showing anyway'); hotspots = rawHs; }
     renderResults(parsed);
-  }catch(e){
-    document.getElementById('aibody').innerHTML=`<div class="aimt"><div class="aimt-ico">⚠️</div><div class="aimt-txt">Analysis failed:<br><small style="color:var(--muted)">${e.message}</small></div></div>`;
+  } catch(e) {
+    document.getElementById('aibody').innerHTML = `<div class="aimt"><div class="aimt-ico">⚠️</div><div class="aimt-txt">Analysis failed:<br><small style="color:var(--muted)">${e.message}</small><br><br><button onclick="clearAnalysisPin()" style="padding:6px 14px;border-radius:5px;border:1px solid var(--teal);background:transparent;color:var(--teal);font-family:'Space Mono';font-size:9px;cursor:pointer">↩ Try Again</button></div></div>`;
   }
-  btn.disabled=false; btn.textContent='🔄 RE-ANALYZE';
+
+  btn.disabled = false;
+  btn.textContent = '🔄 RE-ANALYZE';
 }
 
 // ═══════════════════════════════════════════
