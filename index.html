@@ -751,6 +751,18 @@ input[type=range].rng.sst-rng::-moz-range-thumb{background:var(--hot);}
     <canvas id="satCanvas" style="display:none"></canvas>
     <canvas id="mapCanvas" style="display:none"></canvas>
 
+    <!-- Navionics iframe overlay -->
+    <div id="navionics-overlay" style="display:none;position:absolute;inset:0;z-index:500;">
+      <iframe id="navionics-frame"
+        src=""
+        style="width:100%;height:100%;border:none;"
+        allowfullscreen>
+      </iframe>
+      <div style="position:absolute;top:10px;left:50%;transform:translateX(-50%);background:rgba(2,12,22,0.9);border:1px solid var(--teal);border-radius:6px;padding:5px 12px;font-family:'Space Mono';font-size:9px;color:var(--teal);pointer-events:none">
+        📡 NAVIONICS CHART — scroll &amp; zoom to navigate
+      </div>
+    </div>
+
     <div id="date-bar">
       <label>SAT DATE</label>
       <button class="date-nav" onclick="shiftDate(-1)">‹</button>
@@ -772,6 +784,9 @@ input[type=range].rng.sst-rng::-moz-range-thumb{background:var(--hot);}
       </div>
       <div class="tbtn" id="tbtn-measure" onclick="setMapMode('measure')" title="Measure">
         📏<div class="tt">Measure Distance</div>
+      </div>
+      <div class="tbtn" id="tbtn-navionics" onclick="toggleNavionics()" title="Navionics Chart">
+        ⚓<div class="tt">Navionics Chart</div>
       </div>
     </div>
 
@@ -1312,6 +1327,37 @@ function closeSpotPopup() {
 // ═══════════════════════════════════════════
 // MEASURE TOOL (Leaflet)
 // ═══════════════════════════════════════════
+let navionicsActive = false;
+
+function toggleNavionics() {
+  navionicsActive = !navionicsActive;
+  const overlay = document.getElementById('navionics-overlay');
+  const btn = document.getElementById('tbtn-navionics');
+  const frame = document.getElementById('navionics-frame');
+
+  if (navionicsActive) {
+    // Get current map center + zoom to sync Navionics to same view
+    const center = map ? map.getCenter() : {lat: 27.17, lng: -80.18};
+    const zoom   = map ? map.getZoom()   : 10;
+    const lat    = center.lat.toFixed(4);
+    const lng    = center.lng.toFixed(4);
+
+    // Navionics web app URL — syncs to our current view
+    frame.src = `https://webapp.navionics.com/?lang=en#boating&zoom=${zoom}&lat=${lat}&lng=${lng}`;
+
+    overlay.style.display = 'block';
+    btn.classList.add('active');
+
+    // Disable map interactions while Navionics is open (iframe captures events)
+    if (map) map.dragging.disable();
+  } else {
+    overlay.style.display = 'none';
+    frame.src = ''; // stop loading
+    btn.classList.remove('active');
+    if (map) map.dragging.enable();
+  }
+}
+
 let mapMode = 'pan';
 let measurePts = [];
 let measureResult = null;
