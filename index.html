@@ -1477,8 +1477,6 @@ function renderResults(data) {
   document.getElementById('aibody').innerHTML=html;
 }
 
-
-
 function updateEddySidebar(){
   const el=document.getElementById('eddy-list');
   if(!el)return;
@@ -1638,8 +1636,6 @@ const satRanges = {
 // Per-layer quick opacity (independent of the detailed range sliders)
 const layerAlpha = { noaa:1.0, chl:0.85, sst:0.80, tc:1.0 };
 
-
-
 function onChlChange(){
   satRanges.chl.minLog = parseFloat(document.getElementById('chl-min').value);
   satRanges.chl.maxLog = parseFloat(document.getElementById('chl-max').value);
@@ -1687,9 +1683,6 @@ function resetSst(){
 // ═══════════════════════════════════════════
 // GEO HELPERS
 // ═══════════════════════════════════════════
-
-
-
 
 // ═══════════════════════════════════════════
 // DATE CONTROLS
@@ -1837,10 +1830,6 @@ async function loadAllSatellite(){
   drawSatellite();
 }
 
-async 
-
-
-
 // Apply gamma + range remapping to a canvas image
 // gamma < 1 = compress highlights / boost darks; gamma > 1 = stretch highlights
 // ── Convert RGB → HSV ─────────────────────────────────────────────
@@ -1967,8 +1956,6 @@ function applyImageFilter(srcImg, W, H, gamma, alpha, layerKey){
   satCtx.drawImage(tmp, 0, 0);
 }
 
-
-
 // ═══════════════════════════════════════════
 // BATHYMETRY DATA
 // ═══════════════════════════════════════════
@@ -2011,8 +1998,6 @@ function interpCurrentAt(lat,lng){
   const v=nb.reduce((s,p)=>s+p.v/p.dist,0)/w;
   return{u,v,speed_kt:Math.hypot(u,v),dir_deg:(Math.atan2(u,v)*180/Math.PI+360)%360};
 }
-
-
 
 // ═══════════════════════════════════════════
 // EDDY DETECTION & DRAWING
@@ -2062,10 +2047,6 @@ function detectEddies(){
   detectedEddies=detectedEddies.slice(0,4);
   updateEddySidebar();
 }
-
-
-
-
 
 // ═══════════════════════════════════════════
 // MICRO-EDDY DETECTION — satellite pixel curl
@@ -2231,8 +2212,6 @@ function detectMicroEddies(){
   return results;
 }
 
-
-
 function updateMicroEddySidebar(){
   const el=document.getElementById('me-list');
   if(!el) return;
@@ -2317,8 +2296,6 @@ function detectFronts(){
   }
   return result;
 }
-
-
 
 // ═══════════════════════════════════════════
 // MAIN CANVAS DRAW (overlays only — satellite is on satCanvas)
@@ -2538,9 +2515,6 @@ async function fetchAllData(){
 // MAP MODE + SPOT POPUP + MEASURE
 // ═══════════════════════════════════════════
 
-
-
-
 // ── Coordinate format helpers ────────────────────────────────────
 function toDMS(deg, isLat){
   const d=Math.floor(Math.abs(deg));
@@ -2639,9 +2613,6 @@ function bearingDeg(la1,lo1,la2,lo2){
 }
 
 // ── Open spot popup ───────────────────────────────────────────────
-
-
-
 
 // ── Draw measure overlay on mapCanvas ────────────────────────────
 
@@ -2932,8 +2903,6 @@ Respond ONLY valid JSON:
   }
   btn.disabled=false;btn.textContent='🔄 RE-ANALYZE';
 }
-
-
 
 // ═══════════════════════════════════════════
 // PANEL TABS
