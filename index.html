@@ -3747,10 +3747,9 @@ async function runAIAnalysis() {
     userPrompt = `Find 4 fishing hotspots for ${spNames} within this EXACT area.
 
 Lat: ${sb.south.toFixed(4)}–${sb.north.toFixed(4)}°N
-Lng: ${sb.west.toFixed(4)}–${sb.east.toFixed(4)}°W
-Center: ${sb.centerLat.toFixed(4)}°N, ${Math.abs(sb.centerLng).toFixed(4)}°W
+Lng: ${sb.west.toFixed(4)}–${sb.east.toFixed(4)}°W (west to east, more negative = further west)
 
-HARD CONSTRAINT: Every hotspot lat MUST be between ${sb.south.toFixed(4)} and ${sb.north.toFixed(4)}. Every hotspot lng MUST be between ${sb.west.toFixed(4)} and ${sb.east.toFixed(4)}.
+HARD CONSTRAINT: Every hotspot lat MUST be between ${sb.south.toFixed(4)} and ${sb.north.toFixed(4)}. Every hotspot lng MUST be between ${sb.west.toFixed(4)} and ${sb.east.toFixed(4)} (i.e. lng >= ${sb.west.toFixed(4)} AND lng <= ${sb.east.toFixed(4)}).
 
 Month: ${month}. Season: ${season}. Region: ${region.replace('_',' ')}.
 
@@ -3793,10 +3792,11 @@ Respond ONLY with valid JSON:
     console.log('Claude returned hotspots:', rawHs.map(h => `${h.name}: ${h.lat}, ${h.lng ?? h.lon}`));
     // Normalise — speciesPrompts uses 'lon', fallback prompt uses 'lng'
     rawHs.forEach(hs => { if (hs.lon !== undefined && hs.lng === undefined) hs.lng = hs.lon; });
+    const buf = 0.15; // ~10mi tolerance buffer
     hotspots = rawHs.filter(hs => {
       const lat = parseFloat(hs.lat), lng = parseFloat(hs.lng);
       if (isNaN(lat)||isNaN(lng)) return false;
-      const inBounds = lat>=sb.south && lat<=sb.north && lng>=sb.west && lng<=sb.east;
+      const inBounds = lat>=(sb.south-buf) && lat<=(sb.north+buf) && lng>=(sb.west-buf) && lng<=(sb.east+buf);
       if (!inBounds) console.warn('Hotspot outside bounds, dropped:', hs.name, lat, lng);
       return inBounds;
     });
