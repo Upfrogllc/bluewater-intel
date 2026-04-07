@@ -1125,19 +1125,37 @@ function imgToDataUrl(img, layerKey, alpha) {
 }
 
 // ═══════════════════════════════════════════
-// CURRENT VECTOR ANIMATION (SVG overlay)
+// CURRENT VECTOR ANIMATION — Leaflet Canvas overlay (geo-locked)
 // ═══════════════════════════════════════════
 let animT = 0;
 let animRunning = false;
+let currentCanvas = null; // persistent canvas element
+let currentCtx = null;
 
 function animateCurrents() {
   if (animRunning) return;
   animRunning = true;
+
+  // Create a persistent canvas that sits on top of Leaflet
+  currentCanvas = document.createElement('canvas');
+  currentCanvas.style.cssText = 'position:absolute;top:0;left:0;pointer-events:none;z-index:450;';
+  document.getElementById('mapwrap').appendChild(currentCanvas);
+  currentCtx = currentCanvas.getContext('2d');
+
+  // Resize canvas when map resizes
+  function resizeCanvas() {
+    const el = document.getElementById('mapwrap');
+    currentCanvas.width  = el.clientWidth;
+    currentCanvas.height = el.clientHeight;
+  }
+  resizeCanvas();
+  map.on('resize', resizeCanvas);
+
   let last = 0;
   function frame(ts) {
-    if (ts - last > 100) { // 10fps for vectors
+    if (ts - last > 80) { // ~12fps
       last = ts;
-      animT += 0.05;
+      animT += 0.04;
       drawCurrentOverlay();
       if (layers.edy) drawEddyOverlay();
     }
@@ -1147,67 +1165,74 @@ function animateCurrents() {
 }
 
 function drawCurrentOverlay() {
-  if (!map || !layers.cur || !currentGrid.length) {
-    if (currentArrowLayer) { currentArrowLayer.setStyle({opacity:0}); }
-    return;
-  }
+  if (!map || !currentCanvas || !currentCtx) return;
 
-  // Remove old SVG overlay
-  if (currentArrowLayer) { map.removeLayer(currentArrowLayer); currentArrowLayer = null; }
+  const W = currentCanvas.width, H = currentCanvas.height;
+  currentCtx.clearRect(0, 0, W, H);
 
-  const DIRS=['N','NNE','NE','ENE','E','ESE','SE','SSE','S','SSW','SW','WSW','W','WNW','NW','NNW'];
-  const mapDiv = document.getElementById('mapwrap');
-  const W = mapDiv.clientWidth, H = mapDiv.clientHeight;
-  const b = getViewBounds();
+  if (!layers.cur || !currentGrid.length) return;
 
-  // Create SVG canvas over the map
-  const svg = document.createElementNS('http://www.w3.org/2000/svg','svg');
-  svg.setAttribute('width', W); svg.setAttribute('height', H);
-  svg.style.cssText = 'position:absolute;top:0;left:0;pointer-events:none;z-index:450;';
+  // Draw each data point using Leaflet's geo→pixel conversion
+  // This means arrows are ALWAYS on their actual ocean coordinates
+  for (const pt of currentGrid) {
+    if (pt.speed_kt < 0.02) continue;
 
-  const sp = 50; // spacing px
-  for (let px = sp/2; px < W; px += sp) {
-    for (let py = sp/2; py < H; py += sp) {
-      const [lat, lng] = canvasToGeo(px, py);
-      if (lng < -81 || lng > -78 || lat < 25 || lat > 30) continue;
-      const cur = interpCurrentAt(lat, lng);
-      if (!cur || cur.speed_kt < 0.02) continue;
-      const ar = cur.dir_deg * Math.PI / 180;
-      const len = Math.min(26, 6 + cur.speed_kt * 9);
-      const dx = Math.sin(ar)*len, dy = -Math.cos(ar)*len;
-      const s = Math.min(1, cur.speed_kt / 2.5);
-      const phase = (animT * 0.5 + px * 0.01 + py * 0.007) % 1;
-      const ox = dx*phase*0.28, oy = dy*phase*0.28;
-      const r = Math.round(74+s*181), g2 = Math.round(200-s*50), bl = Math.round(255-s*205);
-      const col = `rgba(${r},${g2},${bl},${0.5+s*0.35})`;
-      const lw = 1+s*0.8;
-      // Arrow line
-      const line = document.createElementNS('http://www.w3.org/2000/svg','line');
-      line.setAttribute('x1',px+ox); line.setAttribute('y1',py+oy);
-      line.setAttribute('x2',px+ox+dx); line.setAttribute('y2',py+oy+dy);
-      line.setAttribute('stroke',col); line.setAttribute('stroke-width',lw);
-      svg.appendChild(line);
-      // Arrowhead
-      const ha = Math.atan2(-dy,-dx);
-      const hl = 5+s*4;
-      const ah1 = document.createElementNS('http://www.w3.org/2000/svg','line');
-      ah1.setAttribute('x1',px+ox+dx); ah1.setAttribute('y1',py+oy+dy);
-      ah1.setAttribute('x2',px+ox+dx+hl*Math.cos(ha+0.4)); ah1.setAttribute('y2',py+oy+dy+hl*Math.sin(ha+0.4));
-      ah1.setAttribute('stroke',col); ah1.setAttribute('stroke-width',lw);
-      svg.appendChild(ah1);
-      const ah2 = document.createElementNS('http://www.w3.org/2000/svg','line');
-      ah2.setAttribute('x1',px+ox+dx); ah2.setAttribute('y1',py+oy+dy);
-      ah2.setAttribute('x2',px+ox+dx+hl*Math.cos(ha-0.4)); ah2.setAttribute('y2',py+oy+dy+hl*Math.sin(ha-0.4));
-      ah2.setAttribute('stroke',col); ah2.setAttribute('stroke-width',lw);
-      svg.appendChild(ah2);
+    // Convert geo coordinate to screen pixel — geo-locked to map
+    const px = map.latLngToContainerPoint([pt.lat, pt.lng]);
+    const x = px.x, y = px.y;
+
+    // Skip if off screen
+    if (x < -30 || x > W + 30 || y < -30 || y > H + 30) continue;
+
+    const s    = Math.min(1, pt.speed_kt / 2.5);
+    const len  = Math.min(28, 7 + pt.speed_kt * 10);
+    const ar   = pt.dir_deg * Math.PI / 180;
+    const dx   = Math.sin(ar) * len;
+    const dy   = -Math.cos(ar) * len;
+
+    // Animated flow: offset along arrow direction
+    const phase = (animT * 0.6 + pt.lat * 3.7 + pt.lng * 2.3) % 1;
+    const ox = dx * phase * 0.3;
+    const oy = dy * phase * 0.3;
+
+    // Color: blue (slow) → teal → white (fast)
+    const r  = Math.round(74  + s * 181);
+    const g2 = Math.round(200 - s * 50);
+    const bl = Math.round(255 - s * 205);
+    const alpha = 0.55 + s * 0.4;
+    const col = `rgba(${r},${g2},${bl},${alpha})`;
+    const lw  = 1.2 + s * 0.9;
+
+    currentCtx.strokeStyle = col;
+    currentCtx.lineWidth   = lw;
+    currentCtx.lineCap     = 'round';
+
+    // Shaft
+    currentCtx.beginPath();
+    currentCtx.moveTo(x + ox,      y + oy);
+    currentCtx.lineTo(x + ox + dx, y + oy + dy);
+    currentCtx.stroke();
+
+    // Arrowhead
+    const ha  = Math.atan2(-dy, -dx);
+    const hl  = 5 + s * 4;
+    const tip = { x: x + ox + dx, y: y + oy + dy };
+    currentCtx.beginPath();
+    currentCtx.moveTo(tip.x, tip.y);
+    currentCtx.lineTo(tip.x + hl * Math.cos(ha + 0.45), tip.y + hl * Math.sin(ha + 0.45));
+    currentCtx.moveTo(tip.x, tip.y);
+    currentCtx.lineTo(tip.x + hl * Math.cos(ha - 0.45), tip.y + hl * Math.sin(ha - 0.45));
+    currentCtx.stroke();
+
+    // Speed label for fast currents
+    if (pt.speed_kt > 1.5) {
+      currentCtx.font      = '7px "Space Mono",monospace';
+      currentCtx.fillStyle = col;
+      currentCtx.fillText(`${pt.speed_kt.toFixed(1)}kt`, tip.x + 3, tip.y - 2);
     }
   }
-
-  mapDiv.appendChild(svg);
-  currentArrowLayer = { remove: () => { if (svg.parentNode) svg.parentNode.removeChild(svg); }, setStyle: ()=>{} };
-  // Auto remove and redraw
-  setTimeout(() => { if (svg.parentNode) svg.parentNode.removeChild(svg); }, 150);
 }
+
 
 function drawEddyOverlay() {
   if (!map || !detectedEddies.length) return;
