@@ -1376,9 +1376,6 @@ function drawCurrentOverlay() {
       for (let y = SPACING / 2; y < H; y += SPACING) {
         const latlng = map.containerPointToLatLng([x, y]);
         const lat = latlng.lat, lng = latlng.lng;
-        const coastLng = -80.5 + (lat - 25) * 0.04;
-        if (lng < coastLng) continue;
-        if (lat < 24 || lat > 32 || lng < -82 || lng > -78) continue;
         const cur = interpCurrentAt(lat, lng);
         if (!cur || cur.speed_kt < 0.01) continue;
         const s   = Math.min(1, cur.speed_kt / 2.0);
@@ -3163,9 +3160,10 @@ async function fetchCurrentData() {
   setDS('loading', `Loading ${CUR_SOURCES[activeCurSrc].label}...`); setFill(0);
   currentGrid = []; document.getElementById('cur-readings').innerHTML = '';
 
-  const spacing = activeCurSrc === 'openmeteo' ? 0.10 :
-                  activeCurSrc === 'oscar'      ? 0.15 :
-                  activeCurSrc === 'cmems'      ? 0.08 : 0.10;
+  // Open-Meteo free tier: ~10 req/min — use wide spacing and sequential fetching
+  const spacing = activeCurSrc === 'openmeteo' ? 0.35 :
+                  activeCurSrc === 'oscar'      ? 0.25 :
+                  activeCurSrc === 'cmems'      ? 0.15 : 0.35;
 
   // Use pin grid if a pin is set, otherwise fall back to viewport grid
   const pts = analysisPin ? buildPinGrid(spacing) : buildViewportGrid(spacing);
@@ -3175,15 +3173,17 @@ async function fetchCurrentData() {
   let results = [];
   try {
     if (activeCurSrc === 'openmeteo') {
-      // Open-Meteo — point-by-point
-      const batchSize = 8;
-      for (let i = 0; i < pts.length; i += batchSize) {
-        const batch = pts.slice(i, i + batchSize);
-        setDS('loading', `Open-Meteo: ${i+1}–${Math.min(i+batchSize, pts.length)} of ${pts.length}...`);
-        setFill(Math.round(i / pts.length * 100));
-        const settled = await Promise.allSettled(batch.map(([la, ln]) => fetchPoint_OpenMeteo(la, ln)));
-        for (const r of settled) { if (r.status === 'fulfilled') results.push(r.value); }
-        if (i + batchSize < pts.length) await new Promise(r => setTimeout(r, 120));
+      // Open-Meteo free tier — fetch ONE at a time with 800ms gap to avoid 429s
+      // At 0.35° spacing a 50mi radius gives ~15-25 points = ~20 seconds total
+      for (let i = 0; i < pts.length; i++) {
+        const [la, ln] = pts[i];
+        setDS('loading', `Fetching ${i+1} of ${pts.length} points...`);
+        setFill(Math.round((i / pts.length) * 100));
+        try {
+          const r = await fetchPoint_OpenMeteo(la, ln);
+          results.push(r);
+        } catch(e) { /* skip failed points */ }
+        if (i < pts.length - 1) await new Promise(r => setTimeout(r, 800));
       }
     } else if (activeCurSrc === 'oscar') {
       results = await fetchCurrents_OSCAR(pts);
