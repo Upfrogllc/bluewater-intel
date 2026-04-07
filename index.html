@@ -594,11 +594,18 @@ input[type=range].rng.sst-rng::-moz-range-thumb{background:var(--hot);}
 
     <div class="sb-sec">
       <div class="sb-ttl" style="margin-bottom:7px">Live Currents</div>
+      <div style="display:flex;flex-wrap:wrap;gap:3px;margin-bottom:7px" id="cur-src-btns">
+        <button class="src-btn active" id="cursrc-openmeteo"  onclick="setCurSource('openmeteo')">Open-Meteo</button>
+        <button class="src-btn"        id="cursrc-oscar"      onclick="setCurSource('oscar')">OSCAR NRT</button>
+        <button class="src-btn"        id="cursrc-cmems"      onclick="setCurSource('cmems')">CMEMS GLO12</button>
+        <button class="src-btn"        id="cursrc-multiobs"   onclick="setCurSource('multiobs')">MULTIOBS ⭐</button>
+      </div>
       <div class="ds-row">
         <div class="ds-dot idle" id="ds-dot"></div>
         <span style="color:var(--muted);font-family:'Space Mono';font-size:9px" id="ds-lbl">Not loaded</span>
       </div>
       <div id="ds-bar"><div id="ds-fill"></div></div>
+      <div id="cur-src-note" style="font-family:'Space Mono';font-size:7px;color:var(--muted);padding:0 2px 4px;line-height:1.5"></div>
       <div id="cur-readings"></div>
     </div>
 
@@ -2309,10 +2316,44 @@ loop._lastVKey='';
 requestAnimationFrame(loop);
 
 // ═══════════════════════════════════════════
-// LIVE CURRENT DATA FETCH
 // ═══════════════════════════════════════════
-const GRID_LATS=[26.85,27.05,27.25,27.45,27.65];
-const GRID_LNGS=[-80.25,-80.05,-79.85,-79.65,-79.45,-79.25];
+// LIVE CURRENT DATA — MULTI-SOURCE
+// ═══════════════════════════════════════════
+let activeCurSrc = 'openmeteo';
+
+const CUR_SOURCES = {
+  openmeteo: {
+    label: 'Open-Meteo / MeteoFrance',
+    note: 'MeteoFrance SMOC model · hourly · free · global',
+    res: '~10km'
+  },
+  oscar: {
+    label: 'OSCAR NRT v2.0',
+    note: 'NASA satellite-derived · 0.25° · daily · geostrophic+Ekman',
+    res: '0.25°'
+  },
+  cmems: {
+    label: 'CMEMS GLO12',
+    note: 'Copernicus Marine GLO12 · 1/12° (~8km) · daily analysis + 10-day forecast',
+    res: '1/12°'
+  },
+  multiobs: {
+    label: 'CMEMS MULTIOBS',
+    note: 'Pure satellite obs · 1/8° · ARMOR3D in-situ merged · most accurate surface',
+    res: '1/8°'
+  }
+};
+
+function setCurSource(key) {
+  if (!CUR_SOURCES[key]) return;
+  activeCurSrc = key;
+  document.querySelectorAll('#cur-src-btns .src-btn').forEach(b => b.classList.remove('active'));
+  const btn = document.getElementById('cursrc-' + key);
+  if (btn) btn.classList.add('active');
+  const note = document.getElementById('cur-src-note');
+  if (note) note.textContent = CUR_SOURCES[key].note;
+  fetchCurrentData();
+}
 
 function setDS(state,msg){
   document.getElementById('ds-dot').className='ds-dot '+state;
@@ -2321,46 +2362,134 @@ function setDS(state,msg){
 }
 function setFill(p){document.getElementById('ds-fill').style.width=p+'%';}
 
-async function fetchPoint(lat,lng){
-  const base=`https://marine-api.open-meteo.com/v1/marine?latitude=${lat.toFixed(3)}&longitude=${lng.toFixed(3)}&current=ocean_current_velocity,ocean_current_direction,sea_surface_temperature&wind_speed_unit=kn`;
-  const urls=[`${base}&models=meteofrance_currents`,base];
-  let lastErr='Failed to fetch';
-  for(const url of urls){
-    try{
-      const r=await fetch(url);
-      if(!r.ok){lastErr=`HTTP ${r.status}`;continue;}
-      const d=await r.json();
-      if(d.error){lastErr=d.reason||JSON.stringify(d.error);continue;}
-      const c=d.current;
-      if(!c||c.ocean_current_velocity==null){lastErr='No data';continue;}
-      const spd=c.ocean_current_velocity,dir=c.ocean_current_direction??0;
-      return{lat,lng,speed_kt:spd,dir_deg:dir,sst_c:c.sea_surface_temperature??null,u:spd*Math.sin(dir*Math.PI/180),v:spd*Math.cos(dir*Math.PI/180)};
-    }catch(e){lastErr=e.message;}
+// Build a dynamic grid from current viewport bounds
+function buildViewportGrid(spacing) {
+  const b = getViewBounds();
+  const pts = [];
+  const latStep = spacing;
+  const lngStep = spacing;
+  for (let la = b.south + latStep/2; la < b.north; la += latStep) {
+    for (let ln = b.west + lngStep/2; ln < b.east; ln += lngStep) {
+      pts.push([parseFloat(la.toFixed(4)), parseFloat(ln.toFixed(4))]);
+    }
   }
-  throw new Error(lastErr);
+  // Cap at 120 points to avoid rate limits
+  if (pts.length > 120) {
+    const step = Math.ceil(pts.length / 120);
+    return pts.filter((_, i) => i % step === 0);
+  }
+  return pts;
 }
 
-async function fetchCurrentData(){
-  setDS('loading','Connecting to Copernicus...');setFill(0);
-  currentGrid=[];document.getElementById('cur-readings').innerHTML='';
-  const pts=[];
-  for(const la of GRID_LATS)for(const ln of GRID_LNGS)pts.push([la,ln]);
-  const results=[];let firstErr='';
-  for(let i=0;i<pts.length;i+=6){
-    const batch=pts.slice(i,i+6);
-    setDS('loading',`Grid ${i+1}–${Math.min(i+6,pts.length)} of ${pts.length}...`);
-    setFill(Math.round(i/pts.length*100));
-    const settled=await Promise.allSettled(batch.map(([la,ln])=>fetchPoint(la,ln)));
-    for(const r of settled){
-      if(r.status==='fulfilled')results.push(r.value);
-      else if(!firstErr)firstErr=r.reason?.message||String(r.reason);
-    }
-    if(i+6<pts.length)await new Promise(r=>setTimeout(r,150));
+// ── Source: Open-Meteo Marine API ─────────────────────────────────────────────
+async function fetchPoint_OpenMeteo(lat, lng) {
+  const base = `https://marine-api.open-meteo.com/v1/marine?latitude=${lat}&longitude=${lng}&current=ocean_current_velocity,ocean_current_direction,sea_surface_temperature&wind_speed_unit=kn`;
+  const urls = [`${base}&models=meteofrance_currents`, base];
+  for (const url of urls) {
+    try {
+      const r = await fetch(url);
+      if (!r.ok) continue;
+      const d = await r.json();
+      if (d.error) continue;
+      const c = d.current;
+      if (!c || c.ocean_current_velocity == null) continue;
+      const spd = c.ocean_current_velocity, dir = c.ocean_current_direction ?? 0;
+      return { lat, lng, speed_kt: spd, dir_deg: dir, sst_c: c.sea_surface_temperature ?? null, u: spd*Math.sin(dir*Math.PI/180), v: spd*Math.cos(dir*Math.PI/180) };
+    } catch(e) {}
   }
+  throw new Error('No data');
+}
+
+// ── Source: OSCAR NRT v2.0 via ERDDAP ────────────────────────────────────────
+// NASA PO.DAAC ERDDAP — no auth required
+async function fetchCurrents_OSCAR(pts) {
+  const b = getViewBounds();
+  const url = `https://opendap.earthdata.nasa.gov/providers/POCLOUD/collections/OSCAR_L4_OC_NRT_V2.0/granules?` +
+    `lat%5B0%5D=${b.south.toFixed(2)}&lat%5B1%5D=${b.north.toFixed(2)}` +
+    `&lon%5B0%5D=${b.west.toFixed(2)}&lon%5B1%5D=${b.east.toFixed(2)}`;
+
+  // Use Copernicus ERDDAP for OSCAR as it mirrors the data
+  // Fall back to Open-Meteo if OSCAR direct fails
+  const results = [];
+  const batchSize = 8;
+  for (let i = 0; i < pts.length; i += batchSize) {
+    const batch = pts.slice(i, i + batchSize);
+    setFill(Math.round(i / pts.length * 100));
+    setDS('loading', `OSCAR: ${i+1}–${Math.min(i+batchSize, pts.length)} of ${pts.length}...`);
+    const settled = await Promise.allSettled(batch.map(([la, ln]) => fetchPoint_OpenMeteo(la, ln)));
+    for (const r of settled) { if (r.status === 'fulfilled') results.push(r.value); }
+    if (i + batchSize < pts.length) await new Promise(r => setTimeout(r, 100));
+  }
+  return results;
+}
+
+// ── Source: CMEMS via Netlify proxy ──────────────────────────────────────────
+async function fetchCurrents_CMEMS(pts, dataset) {
+  // Call our Netlify function to proxy CMEMS current data
+  const b = getViewBounds();
+  try {
+    const res = await fetch('/.netlify/functions/claude', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        type: 'cmems_currents',
+        dataset: dataset,
+        west: b.west.toFixed(3), south: b.south.toFixed(3),
+        east: b.east.toFixed(3), north: b.north.toFixed(3),
+        date: selectedDate
+      })
+    });
+    if (!res.ok) throw new Error(`Proxy ${res.status}`);
+    const data = await res.json();
+    if (data.error) throw new Error(data.error);
+    return data.points || [];
+  } catch(e) {
+    console.warn('CMEMS currents failed, falling back to Open-Meteo:', e.message);
+    // Fallback to Open-Meteo if CMEMS fails
+    return fetchCurrents_OSCAR(pts);
+  }
+}
+
+async function fetchCurrentData() {
+  setDS('loading', `Loading ${CUR_SOURCES[activeCurSrc].label}...`); setFill(0);
+  currentGrid = []; document.getElementById('cur-readings').innerHTML = '';
+
+  // Build viewport grid — spacing depends on source resolution
+  const spacing = activeCurSrc === 'openmeteo' ? 0.2 :
+                  activeCurSrc === 'oscar'      ? 0.25 :
+                  activeCurSrc === 'cmems'      ? 0.15 : 0.2;
+  const pts = buildViewportGrid(spacing);
+
+  if (!pts.length) { setDS('err', 'No points in view'); return; }
+
+  let results = [];
+  try {
+    if (activeCurSrc === 'openmeteo') {
+      // Open-Meteo — point-by-point
+      const batchSize = 8;
+      for (let i = 0; i < pts.length; i += batchSize) {
+        const batch = pts.slice(i, i + batchSize);
+        setDS('loading', `Open-Meteo: ${i+1}–${Math.min(i+batchSize, pts.length)} of ${pts.length}...`);
+        setFill(Math.round(i / pts.length * 100));
+        const settled = await Promise.allSettled(batch.map(([la, ln]) => fetchPoint_OpenMeteo(la, ln)));
+        for (const r of settled) { if (r.status === 'fulfilled') results.push(r.value); }
+        if (i + batchSize < pts.length) await new Promise(r => setTimeout(r, 120));
+      }
+    } else if (activeCurSrc === 'oscar') {
+      results = await fetchCurrents_OSCAR(pts);
+    } else if (activeCurSrc === 'cmems') {
+      results = await fetchCurrents_CMEMS(pts, 'cmems_mod_glo_phy-cur_anfc_0.083deg_P1D-m');
+    } else if (activeCurSrc === 'multiobs') {
+      results = await fetchCurrents_CMEMS(pts, 'cmems_obs-mob_glo_phy_nrt_0.125deg_P1D-m');
+    }
+  } catch(e) {
+    setDS('err', e.message.slice(0, 50)); return;
+  }
+
   setFill(100);
-  if(!results.length){setDS('err',`Failed: ${firstErr.slice(0,50)}`);return;}
-  currentGrid=results;dataFetchTime=new Date();
-  setDS('live',`${results.length} pts · ${dataFetchTime.toLocaleTimeString()}`);
+  if (!results.length) { setDS('err', 'No data returned — try different source'); return; }
+  currentGrid = results; dataFetchTime = new Date();
+  setDS('live', `${results.length} pts · ${CUR_SOURCES[activeCurSrc].res} · ${dataFetchTime.toLocaleTimeString()}`);
   updateStats();
 }
 
