@@ -908,27 +908,22 @@ function initLeafletMap() {
     attributionControl: true
   });
 
-  // 1. NOAA Nautical Chart tiles (RNC) — official charts with 5-10ft contours, soundings, nav aids
-  // NOAA seamless chart tile service — no auth, no CORS issues
-  const noaaRNC = L.tileLayer('https://tileservice.charts.noaa.gov/tiles/50000_1/{z}/{x}/{y}.png', {
+  // 1. ESRI Ocean Base — reliable, nautical depth shading, always works
+  const oceanBase = L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/Ocean/World_Ocean_Base/MapServer/tile/{z}/{y}/{x}', {
     maxZoom: 18,
-    minZoom: 4,
-    attribution: '© NOAA Office of Coast Survey',
-    opacity: 1.0,
-    errorTileUrl: 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg=='
-  }).addTo(map);
-
-  // 2. ESRI Ocean Base as fallback where NOAA tiles are blank (deep ocean)
-  const oceanFallback = L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/Ocean/World_Ocean_Base/MapServer/tile/{z}/{y}/{x}', {
-    maxZoom: 18,
-    attribution: '© Esri, GEBCO',
+    attribution: '© Esri, GEBCO, NOAA, National Geographic',
     opacity: 1.0,
     zIndex: 1
-  });
-  // Add NOAA on top — it has transparent ocean so ESRI shows through offshore
-  noaaRNC.setZIndex(2);
+  }).addTo(map);
 
-  // 3. OpenSeaMap seamark overlay — buoys, lights, nav aids (on top)
+  // 2. ESRI Ocean Reference — port names, depth labels, nav text on top
+  const oceanRef = L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/Ocean/World_Ocean_Reference/MapServer/tile/{z}/{y}/{x}', {
+    maxZoom: 18,
+    opacity: 1.0,
+    zIndex: 2
+  }).addTo(map);
+
+  // 3. OpenSeaMap seamark overlay — buoys, lights, channel markers
   window.seamarkLayer = L.tileLayer('https://tiles.openseamap.org/seamark/{z}/{x}/{y}.png', {
     maxZoom: 18,
     opacity: 0.9,
@@ -936,7 +931,11 @@ function initLeafletMap() {
     zIndex: 3
   }).addTo(map);
 
-  // 4. Draw our supplemental depth contours for offshore (beyond chart detail)
+  // Store refs for opacity control
+  window.noaaRNCLayer = oceanBase;
+  window.oceanRefLayer = oceanRef;
+
+  // 4. Draw our depth contours as Leaflet polylines
   drawDepthContours();
 
   // 3. Satellite overlay pane (sits on top of base, below markers)
@@ -981,7 +980,7 @@ function initLeafletMap() {
   // Update sidebar badge for nav chart
   const badge = document.getElementById('sb-noaa');
   if (badge) badge.className = 'sat-badge live';
-  document.getElementById('sl-noaa').textContent = 'NOAA RNC Charts — live tiles ✓';
+  document.getElementById('sl-noaa').textContent = 'ESRI Ocean + OpenSeaMap ✓';
 
   // Animate current vectors using requestAnimationFrame
   animateCurrents();
