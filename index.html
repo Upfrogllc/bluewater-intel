@@ -887,7 +887,96 @@ input[type=range].rng.sst-rng::-moz-range-thumb{background:var(--hot);}
   </div>
 </div>
 
-<!-- Leaflet JS -->
+<!-- LOCK SCREEN -->
+<div id="lockscreen" style="display:none;position:fixed;inset:0;z-index:99999;background:#020c16;align-items:center;justify-content:center;flex-direction:column;">
+  <div style="width:340px;max-width:90vw;text-align:center">
+    <div style="font-family:'Bebas Neue';font-size:36px;letter-spacing:4px;color:var(--teal);margin-bottom:4px">Blue<span style="color:var(--warm)">Water</span> Intel</div>
+    <div style="font-family:'Space Mono';font-size:9px;color:var(--muted);margin-bottom:36px;letter-spacing:2px">OFFSHORE INTELLIGENCE PLATFORM</div>
+    <div style="font-size:32px;margin-bottom:20px">🔒</div>
+    <input id="lock-input" type="password" placeholder="Enter passcode..."
+      style="width:100%;padding:13px 16px;background:#ffffff08;border:1px solid var(--border);border-radius:8px;color:var(--text);font-family:'Space Mono';font-size:13px;outline:none;text-align:center;letter-spacing:3px;margin-bottom:10px;box-sizing:border-box;transition:border-color .2s"
+      onkeydown="if(event.key==='Enter')submitPasscode()">
+    <div id="lock-err" style="font-family:'Space Mono';font-size:9px;color:var(--hot);height:16px;margin-bottom:8px"></div>
+    <button onclick="submitPasscode()"
+      style="width:100%;padding:13px;border-radius:8px;border:none;background:var(--teal);color:var(--deep);font-family:'Bebas Neue';font-size:18px;letter-spacing:2px;cursor:pointer;transition:all .2s">
+      ENTER
+    </button>
+    <div style="font-family:'Space Mono';font-size:8px;color:var(--muted);margin-top:20px">BlueWater Intel · Treasure Coast FL</div>
+  </div>
+</div>
+
+<script>
+// ── PASSCODE GATE ──────────────────────────────────────────────
+(function() {
+  const TOKEN_KEY = 'bwi_token';
+
+  function showLock() {
+    const ls = document.getElementById('lockscreen');
+    ls.style.display = 'flex';
+    setTimeout(() => document.getElementById('lock-input').focus(), 100);
+  }
+
+  function hideLock() {
+    document.getElementById('lockscreen').style.display = 'none';
+  }
+
+  async function verifyToken(token) {
+    try {
+      const res = await fetch('/.netlify/functions/claude', {
+        method: 'POST', headers: {'Content-Type':'application/json'},
+        body: JSON.stringify({ type: 'verify', token })
+      });
+      const data = await res.json();
+      return data.ok === true;
+    } catch(e) { return false; }
+  }
+
+  window.submitPasscode = async function() {
+    const input = document.getElementById('lock-input');
+    const err   = document.getElementById('lock-err');
+    const btn   = document.querySelector('#lockscreen button');
+    const pc    = input.value.trim();
+    if (!pc) return;
+
+    btn.textContent = 'CHECKING...';
+    btn.disabled = true;
+    err.textContent = '';
+
+    try {
+      const res = await fetch('/.netlify/functions/claude', {
+        method: 'POST', headers: {'Content-Type':'application/json'},
+        body: JSON.stringify({ type: 'auth', passcode: pc })
+      });
+      const data = await res.json();
+      if (data.ok) {
+        sessionStorage.setItem(TOKEN_KEY, data.token);
+        hideLock();
+      } else {
+        err.textContent = '✕ Wrong passcode';
+        input.value = '';
+        input.focus();
+        input.style.borderColor = 'var(--hot)';
+        setTimeout(() => input.style.borderColor = '', 1500);
+      }
+    } catch(e) {
+      err.textContent = '✕ Connection error — try again';
+    }
+
+    btn.textContent = 'ENTER';
+    btn.disabled = false;
+  };
+
+  // Check on load — verify stored token or show lock
+  const stored = sessionStorage.getItem(TOKEN_KEY);
+  if (stored) {
+    verifyToken(stored).then(ok => { if (!ok) showLock(); });
+  } else {
+    showLock();
+  }
+})();
+</script>
+
+
 <script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
 
 <script>
@@ -1172,63 +1261,67 @@ function drawCurrentOverlay() {
 
   if (!layers.cur || !currentGrid.length) return;
 
-  // Draw each data point using Leaflet's geo→pixel conversion
-  // This means arrows are ALWAYS on their actual ocean coordinates
-  for (const pt of currentGrid) {
-    if (pt.speed_kt < 0.02) continue;
+  // Dense interpolated grid — one arrow every 28px
+  // Uses interpCurrentAt (IDW) to estimate current at any point between data
+  const SPACING = 28;
 
-    // Convert geo coordinate to screen pixel — geo-locked to map
-    const px = map.latLngToContainerPoint([pt.lat, pt.lng]);
-    const x = px.x, y = px.y;
+  for (let x = SPACING / 2; x < W; x += SPACING) {
+    for (let y = SPACING / 2; y < H; y += SPACING) {
 
-    // Skip if off screen
-    if (x < -30 || x > W + 30 || y < -30 || y > H + 30) continue;
+      // Convert screen pixel to geo using Leaflet
+      const latlng = map.containerPointToLatLng([x, y]);
+      const lat = latlng.lat, lng = latlng.lng;
 
-    const s    = Math.min(1, pt.speed_kt / 2.5);
-    const len  = Math.min(28, 7 + pt.speed_kt * 10);
-    const ar   = pt.dir_deg * Math.PI / 180;
-    const dx   = Math.sin(ar) * len;
-    const dy   = -Math.cos(ar) * len;
+      // Skip land (rough bounding box for Florida east coast offshore)
+      // Coastline is ~80.1W to 80.4W depending on lat — skip anything west of that
+      const coastLng = -80.5 + (lat - 25) * 0.04; // approximate shoreline
+      if (lng < coastLng) continue;
+      if (lat < 24 || lat > 32 || lng < -82 || lng > -78) continue;
 
-    // Animated flow: offset along arrow direction
-    const phase = (animT * 0.6 + pt.lat * 3.7 + pt.lng * 2.3) % 1;
-    const ox = dx * phase * 0.3;
-    const oy = dy * phase * 0.3;
+      // Interpolate current at this geo point
+      const cur = interpCurrentAt(lat, lng);
+      if (!cur || cur.speed_kt < 0.01) continue;
 
-    // Color: blue (slow) → teal → white (fast)
-    const r  = Math.round(74  + s * 181);
-    const g2 = Math.round(200 - s * 50);
-    const bl = Math.round(255 - s * 205);
-    const alpha = 0.55 + s * 0.4;
-    const col = `rgba(${r},${g2},${bl},${alpha})`;
-    const lw  = 1.2 + s * 0.9;
+      const s   = Math.min(1, cur.speed_kt / 2.0);
+      const len = Math.min(22, 5 + cur.speed_kt * 8);
+      const ar  = cur.dir_deg * Math.PI / 180;
+      const dx  = Math.sin(ar) * len;
+      const dy  = -Math.cos(ar) * len;
 
-    currentCtx.strokeStyle = col;
-    currentCtx.lineWidth   = lw;
-    currentCtx.lineCap     = 'round';
+      // Animated flow offset
+      const phase = (animT * 0.6 + lat * 4.1 + lng * 3.3) % 1;
+      const ox = dx * phase * 0.25;
+      const oy = dy * phase * 0.25;
 
-    // Shaft
-    currentCtx.beginPath();
-    currentCtx.moveTo(x + ox,      y + oy);
-    currentCtx.lineTo(x + ox + dx, y + oy + dy);
-    currentCtx.stroke();
+      // Color: deep blue (slow) → cyan → white (fast)
+      const r  = Math.round(40  + s * 215);
+      const g2 = Math.round(160 + s * 95);
+      const bl = Math.round(255);
+      const alpha = 0.45 + s * 0.5;
+      const col = `rgba(${r},${g2},${bl},${alpha})`;
+      const lw  = 0.8 + s * 1.0;
 
-    // Arrowhead
-    const ha  = Math.atan2(-dy, -dx);
-    const hl  = 5 + s * 4;
-    const tip = { x: x + ox + dx, y: y + oy + dy };
-    currentCtx.beginPath();
-    currentCtx.moveTo(tip.x, tip.y);
-    currentCtx.lineTo(tip.x + hl * Math.cos(ha + 0.45), tip.y + hl * Math.sin(ha + 0.45));
-    currentCtx.moveTo(tip.x, tip.y);
-    currentCtx.lineTo(tip.x + hl * Math.cos(ha - 0.45), tip.y + hl * Math.sin(ha - 0.45));
-    currentCtx.stroke();
+      currentCtx.strokeStyle = col;
+      currentCtx.lineWidth   = lw;
+      currentCtx.lineCap     = 'round';
 
-    // Speed label for fast currents
-    if (pt.speed_kt > 1.5) {
-      currentCtx.font      = '7px "Space Mono",monospace';
-      currentCtx.fillStyle = col;
-      currentCtx.fillText(`${pt.speed_kt.toFixed(1)}kt`, tip.x + 3, tip.y - 2);
+      // Shaft
+      currentCtx.beginPath();
+      currentCtx.moveTo(x + ox,      y + oy);
+      currentCtx.lineTo(x + ox + dx, y + oy + dy);
+      currentCtx.stroke();
+
+      // Arrowhead
+      const ha  = Math.atan2(-dy, -dx);
+      const hl  = 4 + s * 3;
+      const tx  = x + ox + dx;
+      const ty  = y + oy + dy;
+      currentCtx.beginPath();
+      currentCtx.moveTo(tx, ty);
+      currentCtx.lineTo(tx + hl * Math.cos(ha + 0.5), ty + hl * Math.sin(ha + 0.5));
+      currentCtx.moveTo(tx, ty);
+      currentCtx.lineTo(tx + hl * Math.cos(ha - 0.5), ty + hl * Math.sin(ha - 0.5));
+      currentCtx.stroke();
     }
   }
 }
@@ -2476,9 +2569,9 @@ function buildViewportGrid(spacing) {
       pts.push([parseFloat(la.toFixed(4)), parseFloat(ln.toFixed(4))]);
     }
   }
-  // Cap at 120 points to avoid rate limits
-  if (pts.length > 120) {
-    const step = Math.ceil(pts.length / 120);
+  // Cap at 400 points to avoid rate limits
+  if (pts.length > 400) {
+    const step = Math.ceil(pts.length / 400);
     return pts.filter((_, i) => i % step === 0);
   }
   return pts;
@@ -2557,10 +2650,10 @@ async function fetchCurrentData() {
   setDS('loading', `Loading ${CUR_SOURCES[activeCurSrc].label}...`); setFill(0);
   currentGrid = []; document.getElementById('cur-readings').innerHTML = '';
 
-  // Build viewport grid — spacing depends on source resolution
-  const spacing = activeCurSrc === 'openmeteo' ? 0.2 :
-                  activeCurSrc === 'oscar'      ? 0.25 :
-                  activeCurSrc === 'cmems'      ? 0.15 : 0.2;
+  // Build viewport grid — tighter spacing = more data points for interpolation
+  const spacing = activeCurSrc === 'openmeteo' ? 0.10 :
+                  activeCurSrc === 'oscar'      ? 0.15 :
+                  activeCurSrc === 'cmems'      ? 0.08 : 0.10;
   const pts = buildViewportGrid(spacing);
 
   if (!pts.length) { setDS('err', 'No points in view'); return; }
