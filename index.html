@@ -330,12 +330,16 @@ input[type=range].rng.sst-rng::-moz-range-thumb{background:var(--hot);}
       <!-- Source picker grid -->
       <div style="font-family:'Space Mono';font-size:7px;color:var(--bait);margin:3px 2px 2px;letter-spacing:1px">⭐ = 300m native resolution</div>
       <div id="chl-src-grid" style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:3px;margin:2px 0 2px;padding:0 2px">
-        <button class="src-btn active" id="src-n20"  onclick="setChlSource('n20')"  title="NOAA-20 VIIRS · 1km · daily · Dec 2017–now">NOAA-20</button>
-        <button class="src-btn"        id="src-n21"  onclick="setChlSource('n21')"  title="NOAA-21 VIIRS · 1km · daily · Mar 2023–now">NOAA-21</button>
-        <button class="src-btn"        id="src-s3a"  onclick="setChlSource('s3a')"  title="Sentinel-3A OLCI · 300m native · NRT daily · BEST RESOLUTION">S-3A ⭐</button>
-        <button class="src-btn"        id="src-s3b"  onclick="setChlSource('s3b')"  title="Sentinel-3B OLCI · 300m native · NRT daily · BEST RESOLUTION">S-3B ⭐</button>
-        <button class="src-btn"        id="src-snpp" onclick="setChlSource('snpp')" title="Suomi-NPP VIIRS · 1km · daily · 2012–now">S-NPP</button>
-        <button class="src-btn"        id="src-pace" onclick="setChlSource('pace')" title="PACE OCI · 1km · daily · Feb 2024–now · newest sensor">PACE</button>
+        <button class="src-btn active" id="src-n20"      onclick="setChlSource('n20')"      title="NOAA-20 VIIRS · 1km · daily · Dec 2017–now">NOAA-20</button>
+        <button class="src-btn"        id="src-n21"      onclick="setChlSource('n21')"      title="NOAA-21 VIIRS · 1km · daily · Mar 2023–now">NOAA-21</button>
+        <button class="src-btn"        id="src-s3a"      onclick="setChlSource('s3a')"      title="Sentinel-3A OLCI · 300m native · NRT daily · BEST RESOLUTION">S-3A ⭐</button>
+        <button class="src-btn"        id="src-s3b"      onclick="setChlSource('s3b')"      title="Sentinel-3B OLCI · 300m native · NRT daily · BEST RESOLUTION">S-3B ⭐</button>
+        <button class="src-btn"        id="src-snpp"     onclick="setChlSource('snpp')"     title="Suomi-NPP VIIRS · 1km · daily · 2012–now">S-NPP</button>
+        <button class="src-btn"        id="src-pace"     onclick="setChlSource('pace')"     title="PACE OCI · 1km · daily · Feb 2024–now · newest sensor">PACE</button>
+        <button class="src-btn"        id="src-modisA"   onclick="setChlSource('modisA')"   title="MODIS-Aqua · 1km · daily · 2002–now · afternoon pass">MODIS-Aqua</button>
+        <button class="src-btn"        id="src-modisT"   onclick="setChlSource('modisT')"   title="MODIS-Terra · 1km · daily · 2000–now · morning pass">MODIS-Terra</button>
+        <button class="src-btn"        id="src-msl12nrt" onclick="setChlSource('msl12nrt')" title="NOAA MSL12 DINEOF gap-filled · 9km · fills cloud gaps · NRT daily">MSL12 NRT ⭐</button>
+        <button class="src-btn"        id="src-msl12sq"  onclick="setChlSource('msl12sq')"  title="NOAA MSL12 VIIRS+OLCI gap-filled · 2km · science quality · 2018–now">MSL12 2km ⭐</button>
       </div>
       <div id="chl-src-note" style="font-family:'Space Mono';font-size:7px;color:var(--muted);padding:0 2px 6px;line-height:1.6"></div>
 
@@ -724,12 +728,16 @@ const GIBS = 'https://gibs.earthdata.nasa.gov/wms/epsg4326/best/wms.cgi';
 // type:'gibs' = NASA GIBS WMS (1km resampled)
 // type:'coastwatch' = NOAA CoastWatch ERDDAP WMS (300m NATIVE resolution!)
 const CHL_SOURCES = {
-  n20:  { type:'gibs', layer:'VIIRS_NOAA20_Chlorophyll_A',    label:'NOAA-20',    res:'1km',  note:'Daily · Dec 2017–now ✓' },
-  n21:  { type:'gibs', layer:'VIIRS_NOAA21_Chlorophyll_A',    label:'NOAA-21',    res:'1km',  note:'Daily · Mar 2023–now ✓' },
-  s3a:  { type:'coastwatch', dataset:'noaacwS3AOLCIchlaSectorNHDaily', variable:'chlor_a', label:'S-3A 300m',  res:'300m', note:'Sentinel-3A OLCI · 300m native · NRT daily ⭐' },
-  s3b:  { type:'coastwatch', dataset:'noaacwS3BOLCIchlaSectorNHDaily', variable:'chlor_a', label:'S-3B 300m',  res:'300m', note:'Sentinel-3B OLCI · 300m native · NRT daily ⭐' },
-  snpp: { type:'gibs', layer:'VIIRS_SNPP_Chlorophyll_A',      label:'Suomi-NPP',  res:'1km',  note:'Daily · 2012–now' },
-  pace: { type:'gibs', layer:'PACE_OCI_Chlorophyll_A',        label:'PACE/OCI',   res:'1km',  note:'Daily · Feb 2024–now (newest sensor)' },
+  n20:      { type:'gibs',        layer:'VIIRS_NOAA20_Chlorophyll_A',           label:'NOAA-20',        res:'1km',  note:'Daily · Dec 2017–now ✓' },
+  n21:      { type:'gibs',        layer:'VIIRS_NOAA21_Chlorophyll_A',           label:'NOAA-21',        res:'1km',  note:'Daily · Mar 2023–now ✓' },
+  s3a:      { type:'coastwatch',  dataset:'noaacwS3AOLCIchlaSectorNHDaily',     variable:'chlor_a',     label:'S-3A 300m',      res:'300m', note:'Sentinel-3A OLCI · 300m native · NRT daily ⭐' },
+  s3b:      { type:'coastwatch',  dataset:'noaacwS3BOLCIchlaSectorNHDaily',     variable:'chlor_a',     label:'S-3B 300m',      res:'300m', note:'Sentinel-3B OLCI · 300m native · NRT daily ⭐' },
+  snpp:     { type:'gibs',        layer:'VIIRS_SNPP_Chlorophyll_A',             label:'Suomi-NPP',      res:'1km',  note:'Daily · 2012–now' },
+  pace:     { type:'gibs',        layer:'PACE_OCI_Chlorophyll_A',               label:'PACE/OCI',       res:'1km',  note:'Daily · Feb 2024–now (newest sensor)' },
+  modisA:   { type:'gibs',        layer:'MODIS_Aqua_Chlorophyll_A',             label:'MODIS-Aqua',     res:'1km',  note:'Daily · 2002–now · afternoon pass ~1:30pm' },
+  modisT:   { type:'gibs',        layer:'MODIS_Terra_Chlorophyll_A',            label:'MODIS-Terra',    res:'1km',  note:'Daily · 2000–now · morning pass ~10:30am' },
+  msl12nrt: { type:'coastwatch',  dataset:'noaacwNPPN20VIIRSDINEOFDaily',       variable:'chlor_a',     label:'MSL12 Gap-fill',  res:'9km',  note:'VIIRS SNPP+NOAA-20 DINEOF gap-filled · fills cloud gaps · NRT daily ⭐' },
+  msl12sq:  { type:'coastwatch',  dataset:'noaacwNPPN20S3ASCIDINEOF2kmDaily',   variable:'chlor_a',     label:'MSL12 2km SQ',    res:'2km',  note:'VIIRS+OLCI gap-filled · 2km · science quality · 2018–now ⭐' },
 };
 let activeChlSrc = 'n20'; // currently selected source
 
