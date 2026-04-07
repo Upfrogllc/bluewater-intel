@@ -1,3 +1,4 @@
+
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -1293,9 +1294,12 @@ async function loadNOAAChart(){
     const tc = tileCanvas.getContext('2d');
 
     // NOAA WMTS tile endpoints — try in order
+    // NOAA Chart Display Service WMTS — current active endpoint (2024+)
+    // Format: /arcgis/rest/services/MarineChart_Services/NOAACharts/MapServer/WMTS/tile/1.0.0/
+    //         MarineChart_Services_NOAACharts/default/default028mm/{z}/{y}/{x}.png
     const tileBases = [
-      'https://tileservice.charts.noaa.gov/tiles/50000_1',
-      'https://tileservice.charts.noaa.gov/tiles/14000_1',
+      'https://gis.charttools.noaa.gov/arcgis/rest/services/MarineChart_Services/NOAACharts/MapServer/WMTS/tile/1.0.0/MarineChart_Services_NOAACharts/default/default028mm',
+      'https://gis.charttools.noaa.gov/arcgis/rest/services/MarineChart_Services/NOAACharts/MapServer/WMTS/tile/1.0.0/MarineChart_Services_NOAACharts/default/GoogleMapsCompatible',
     ];
 
     let loaded = 0, failed = 0;
@@ -1310,7 +1314,7 @@ async function loadNOAAChart(){
               await new Promise((res,rej)=>{
                 img.onload = res;
                 img.onerror = rej;
-                img.src = `${base}/${z}/${tx}/${ty}.png`;
+                img.src = `${base}/${z}/${ty}/${tx}.png`;
                 setTimeout(()=>rej(new Error('timeout')),8000);
               });
               const px = (tx - txMin) * tileSize;
