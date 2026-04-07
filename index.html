@@ -3772,6 +3772,10 @@ async function runAIAnalysis() {
     const parsed = JSON.parse(data.content.map(i=>i.text||'').join('').replace(/```json|```/g,'').trim());
 
     const rawHs = parsed.hotspots || [];
+    console.log('Search bounds:', sb.south.toFixed(4), sb.north.toFixed(4), sb.west.toFixed(4), sb.east.toFixed(4));
+    console.log('Claude returned hotspots:', rawHs.map(h => `${h.name}: ${h.lat}, ${h.lng ?? h.lon}`));
+    // Normalise — speciesPrompts uses 'lon', fallback prompt uses 'lng'
+    rawHs.forEach(hs => { if (hs.lon !== undefined && hs.lng === undefined) hs.lng = hs.lon; });
     hotspots = rawHs.filter(hs => {
       const lat = parseFloat(hs.lat), lng = parseFloat(hs.lng);
       if (isNaN(lat)||isNaN(lng)) return false;
