@@ -18,11 +18,10 @@ exports.handler = async (event) => {
     if (type === 'auth') {
       const { passcode } = payload;
       const correct = process.env.VITE_APP_PASSCODE || process.env.APP_PASSCODE || '';
-      if (!correct) return { statusCode: 500, headers: CORS, body: JSON.stringify({ error: 'Passcode not configured' }) };
+      if (!correct) return { statusCode: 500, headers: CORS, body: JSON.stringify({ error: 'Passcode not configured in Netlify env vars' }) };
       if (passcode === correct) {
-        // Return a simple session token (hash of passcode + day so it expires daily)
-        const day = new Date().toISOString().split('T')[0];
-        const token = Buffer.from(`${correct}:${day}`).toString('base64');
+        const day = new Date().toISOString().split('T')[0].replace(/-/g,'');
+        const token = `bwi_${day}_${correct.length}_${correct.charCodeAt(0)}`;
         return { statusCode: 200, headers: CORS, body: JSON.stringify({ ok: true, token }) };
       }
       return { statusCode: 401, headers: CORS, body: JSON.stringify({ ok: false, error: 'Wrong passcode' }) };
@@ -32,8 +31,8 @@ exports.handler = async (event) => {
     if (type === 'verify') {
       const { token } = payload;
       const correct = process.env.VITE_APP_PASSCODE || process.env.APP_PASSCODE || '';
-      const day = new Date().toISOString().split('T')[0];
-      const expected = Buffer.from(`${correct}:${day}`).toString('base64');
+      const day = new Date().toISOString().split('T')[0].replace(/-/g,'');
+      const expected = `bwi_${day}_${correct.length}_${correct.charCodeAt(0)}`;
       return { statusCode: 200, headers: CORS, body: JSON.stringify({ ok: token === expected }) };
     }
 
