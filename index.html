@@ -1539,7 +1539,15 @@ const GIBS_LAYERS = {
 };
 
 
+const satLayers = {chl:false, sst:false, tc:false}; // all off at startup
 const layers    = {cur:false, edy:false, frt:false, me:false}; // all off at startup
+
+// Satellite image cache per layer
+const satCache = {chl:{img:null,key:'',status:'idle'}, sst:{img:null,key:'',status:'idle'}, tc:{img:null,key:'',status:'idle'}};
+
+// Runtime state
+let currentGrid=[], dataFetchTime=null, hotspots=[], detectedEddies=[];
+let microEddies=[], detectedFronts=null, animT=0;
 
 // Date state — default to yesterday (most recent satellite data with processing lag)
 // NOAA-20/21 are available within ~3hrs of overpass but we default to yesterday for safety
