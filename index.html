@@ -175,6 +175,9 @@ input[type=range].rng.sst-rng::-webkit-slider-thumb{background:var(--hot);}
 input[type=range].rng.sst-rng::-moz-range-thumb{background:var(--hot);}
 .rng-reset{font-family:'Space Mono';font-size:7px;color:var(--muted);background:transparent;border:none;cursor:pointer;padding:0;text-decoration:underline;}
 .rng-reset:hover{color:var(--teal);}
+.chl-preset{font-family:'Space Mono';font-size:8px;padding:4px 2px;border-radius:4px;border:1px solid var(--border);background:transparent;color:var(--muted);cursor:pointer;transition:all .15s;text-align:center;white-space:nowrap;}
+.chl-preset:hover{border-color:var(--bait);color:var(--bait);}
+.chl-preset.active-preset{border-color:var(--bait);background:#5dffaa18;color:var(--bait);}
 
 /* Chlorophyll source picker */
 .src-btn{
@@ -686,23 +689,52 @@ input[type=range].rng.sst-rng::-moz-range-thumb{background:var(--hot);}
     <div class="sb-sec">
       <div class="sb-ttl">Satellite Range &amp; Contrast</div>
 
-      <!-- CHL sliders -->
+      <!-- CHL range — direct mg/m³ inputs + slider -->
       <div class="rng-wrap">
         <div class="rng-header">
           <span class="rng-lbl">CHLOROPHYLL (mg/m³)</span>
           <button class="rng-reset" onclick="resetChl()">reset</button>
         </div>
-        <div id="chl-grad" class="lgnd-bar" style="background:linear-gradient(to right,#020c16,#003366,#0066aa,#00aa44,#aadd00,#ffaa00,#ff4400)"></div>
-        <div class="rng-row">
+        <div id="chl-grad" class="lgnd-bar" style="background:linear-gradient(to right,#020c16,#003366,#0066aa,#00aa44,#aadd00,#ffaa00,#ff4400);margin-bottom:6px"></div>
+
+        <!-- Species presets -->
+        <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:3px;margin-bottom:7px">
+          <button class="chl-preset" onclick="setChlPreset(0.05,0.30,'Mahi')"     title="Mahi-Mahi: moderate chl edges">🐬 Mahi</button>
+          <button class="chl-preset" onclick="setChlPreset(0.10,0.40,'Sailfish')" title="Sailfish: mod-high chl">⛵ Sail</button>
+          <button class="chl-preset" onclick="setChlPreset(0.05,0.20,'Marlin')"   title="Blue Marlin: low-mod, blue water">🔵 Marlin</button>
+          <button class="chl-preset" onclick="setChlPreset(0.15,0.60,'Wahoo')"    title="Wahoo: current edges">🎣 Wahoo</button>
+          <button class="chl-preset" onclick="setChlPreset(0.20,1.00,'Tuna')"     title="Yellowfin/Blackfin: bait-rich">🟡 Tuna</button>
+          <button class="chl-preset" onclick="setChlPreset(0.01,20.0,'Full')"     title="Show full range">🌊 Full</button>
+        </div>
+
+        <!-- Min/Max direct number inputs -->
+        <div style="display:grid;grid-template-columns:auto 1fr auto 1fr;gap:4px;align-items:center;margin-bottom:5px">
+          <span class="rng-tag" style="width:auto;padding-right:4px">min</span>
+          <input type="number" id="chl-min-val" min="0.001" max="20" step="0.01" value="0.01"
+            style="width:100%;padding:3px 5px;background:#ffffff0a;border:1px solid var(--border);border-radius:4px;color:var(--bait);font-family:'Space Mono';font-size:9px;outline:none;text-align:center"
+            oninput="onChlDirectInput()" onchange="onChlDirectInput()">
+          <span class="rng-tag" style="width:auto;padding:0 4px">max</span>
+          <input type="number" id="chl-max-val" min="0.01" max="20" step="0.01" value="10"
+            style="width:100%;padding:3px 5px;background:#ffffff0a;border:1px solid var(--border);border-radius:4px;color:var(--warm);font-family:'Space Mono';font-size:9px;outline:none;text-align:center"
+            oninput="onChlDirectInput()" onchange="onChlDirectInput()">
+        </div>
+        <div style="font-family:'Space Mono';font-size:7px;color:var(--muted);margin-bottom:5px;text-align:center">
+          Type any value · e.g. 0.14 to 0.34 for sailfish
+        </div>
+
+        <!-- Dual-handle range visual (min slider + max slider stacked) -->
+        <div class="rng-row" style="margin-bottom:2px">
           <span class="rng-tag">min</span>
-          <input type="range" class="rng" id="chl-min" min="-3" max="1" step="0.1" value="-2" oninput="onChlChange()">
-          <span class="rng-vals" id="chl-min-lbl">0.01</span>
+          <input type="range" class="rng" id="chl-min" min="-3" max="1.3" step="0.05" value="-2" oninput="onChlSliderChange()">
+          <span class="rng-vals" id="chl-min-lbl" style="color:var(--bait);min-width:36px">0.01</span>
         </div>
-        <div class="rng-row">
+        <div class="rng-row" style="margin-bottom:6px">
           <span class="rng-tag">max</span>
-          <input type="range" class="rng" id="chl-max" min="-1" max="2" step="0.1" value="1" oninput="onChlChange()">
-          <span class="rng-vals" id="chl-max-lbl">10</span>
+          <input type="range" class="rng" id="chl-max" min="-1" max="1.3" step="0.05" value="1" oninput="onChlSliderChange()">
+          <span class="rng-vals" id="chl-max-lbl" style="color:var(--warm);min-width:36px">10.0</span>
         </div>
+
+        <!-- Gamma + Alpha -->
         <div class="rng-row">
           <span class="rng-tag">γ</span>
           <input type="range" class="rng" id="chl-gamma" min="0.3" max="3" step="0.05" value="1" oninput="onChlChange()">
@@ -1251,7 +1283,6 @@ function updateSatBanner(){
   if(!banner) return;
   const activeLayers = ['chl','sst','tc'].filter(k => satLayers[k]);
   if(!activeLayers.length){ banner.classList.add('hidden'); return; }
-
   let bestLayer = null, bestStatus = 'idle';
   for(const k of activeLayers){
     const st = satCache[k].status;
@@ -1260,40 +1291,24 @@ function updateSatBanner(){
     if(st === 'err' && !bestLayer){ bestLayer = k; bestStatus = 'err'; }
   }
   if(!bestLayer) bestLayer = activeLayers[0];
-
   const dot = document.getElementById('ssb-dot');
   const satEl = document.getElementById('ssb-sat');
   const dateEl = document.getElementById('ssb-date');
   const resEl = document.getElementById('ssb-res');
   const errSep = document.getElementById('ssb-err-sep');
   const errMsg = document.getElementById('ssb-err-msg');
-
   let satName = '—', res = '—';
-  if(bestLayer === 'chl'){
-    const src = CHL_SOURCES[activeChlSrc];
-    satName = src ? src.label : 'CHL';
-    res = src ? src.res : '1km';
-  } else if(bestLayer === 'sst'){
-    const src = SST_SOURCES[activeSstSrc];
-    satName = src ? src.label : 'SST';
-    res = src ? src.res : '1km';
-  } else if(bestLayer === 'tc'){
-    satName = 'NOAA-20 VIIRS';
-    res = '250m';
-  }
+  if(bestLayer === 'chl'){ const src = CHL_SOURCES[activeChlSrc]; satName = src ? src.label : 'CHL'; res = src ? src.res : '1km'; }
+  else if(bestLayer === 'sst'){ const src = SST_SOURCES[activeSstSrc]; satName = src ? src.label : 'SST'; res = src ? src.res : '1km'; }
+  else if(bestLayer === 'tc'){ satName = 'NOAA-20 VIIRS'; res = '250m'; }
   const layerNames = activeLayers.map(k => ({chl:'CHL',sst:'SST',tc:'TC'}[k])).join('+');
-
   dot.className = 'ssb-dot ' + bestStatus;
   satEl.textContent = activeLayers.length > 1 ? layerNames + ' · ' + satName : satName;
   dateEl.textContent = selectedDate;
   resEl.textContent = res;
-
   const errLayers = activeLayers.filter(k => satCache[k].status === 'err');
-  if(errLayers.length > 0){
-    errSep.style.display = ''; errMsg.style.display = '';
-    errMsg.textContent = errLayers.map(k => ({chl:'CHL',sst:'SST',tc:'TC'}[k])).join(', ') + ' failed';
-  } else { errSep.style.display = 'none'; errMsg.style.display = 'none'; }
-
+  if(errLayers.length > 0){ errSep.style.display = ''; errMsg.style.display = ''; errMsg.textContent = errLayers.map(k => ({chl:'CHL',sst:'SST',tc:'TC'}[k])).join(', ') + ' failed'; }
+  else { errSep.style.display = 'none'; errMsg.style.display = 'none'; }
   banner.classList.remove('hidden');
 }
 
@@ -1648,8 +1663,7 @@ function toggleLayer(key) {
     if(!hasCurData && !hasSatData){
       const meList = document.getElementById('me-list');
       if(meList) meList.innerHTML = '<div style="color:var(--warm);font-size:9px;font-family:\'Space Mono\';line-height:1.7">' +
-        '⚠ No data to detect from yet.<br>' +
-        'Enable one or more:<br>' +
+        '⚠ No data to detect from yet.<br>Enable one or more:<br>' +
         '• <strong style="color:var(--cold)">Live Currents</strong> — vorticity detection<br>' +
         '• <strong style="color:var(--bait)">Chlorophyll-a</strong> or <strong style="color:var(--hot)">SST</strong> — gradient detection<br>' +
         'Then toggle Micro-Eddies on again.</div>';
@@ -1659,8 +1673,7 @@ function toggleLayer(key) {
       if(!microEddies.length){
         const meList = document.getElementById('me-list');
         if(meList) meList.innerHTML = '<div style="color:var(--muted);font-size:9px;font-family:\'Space Mono\';line-height:1.7">' +
-          'No micro-eddies at current sensitivity.<br>' +
-          'Try lowering <strong style="color:var(--teal)">sens</strong> or increasing <strong style="color:var(--teal)">size</strong>.</div>';
+          'No micro-eddies at current sensitivity.<br>Try lowering <strong style="color:var(--teal)">sens</strong> or increasing <strong style="color:var(--teal)">size</strong>.</div>';
       }
     }
   }
@@ -1964,13 +1977,76 @@ const satRanges = {
 // Per-layer quick opacity (independent of the detailed range sliders)
 const layerAlpha = { noaa:1.0, chl:0.85, sst:0.80, tc:1.0 };
 
+// ── CHL direct-value helpers ─────────────────────────────────────
+function chlMgToLog(mg){ return Math.log10(Math.max(0.001, mg)); }
+function chlLogToMg(log){ return Math.pow(10, log); }
+function chlFmtMg(mg){
+  if(mg < 0.1)  return mg.toFixed(3);
+  if(mg < 1)    return mg.toFixed(2);
+  if(mg < 10)   return mg.toFixed(1);
+  return mg.toFixed(0);
+}
+
+// Called when sliders move — updates number inputs + state
+function onChlSliderChange(){
+  const minLog = parseFloat(document.getElementById('chl-min').value);
+  const maxLog = parseFloat(document.getElementById('chl-max').value);
+  // Prevent inversion
+  if(minLog >= maxLog){
+    document.getElementById('chl-min').value = Math.min(minLog, maxLog - 0.1);
+    return onChlSliderChange();
+  }
+  const minMg = chlLogToMg(minLog), maxMg = chlLogToMg(maxLog);
+  document.getElementById('chl-min-lbl').textContent = chlFmtMg(minMg);
+  document.getElementById('chl-max-lbl').textContent = chlFmtMg(maxMg);
+  document.getElementById('chl-min-val').value = minMg.toFixed(3);
+  document.getElementById('chl-max-val').value = maxMg.toFixed(3);
+  document.querySelectorAll('.chl-preset').forEach(b => b.classList.remove('active-preset'));
+  onChlChange();
+}
+
+// Called when number inputs change — updates sliders + state
+function onChlDirectInput(){
+  let minMg = parseFloat(document.getElementById('chl-min-val').value);
+  let maxMg = parseFloat(document.getElementById('chl-max-val').value);
+  if(isNaN(minMg) || isNaN(maxMg)) return;
+  minMg = Math.max(0.001, minMg);
+  maxMg = Math.max(minMg + 0.001, maxMg);
+  const minLog = chlMgToLog(minMg), maxLog = chlMgToLog(maxMg);
+  document.getElementById('chl-min').value = minLog;
+  document.getElementById('chl-max').value = maxLog;
+  document.getElementById('chl-min-lbl').textContent = chlFmtMg(minMg);
+  document.getElementById('chl-max-lbl').textContent = chlFmtMg(maxMg);
+  document.querySelectorAll('.chl-preset').forEach(b => b.classList.remove('active-preset'));
+  onChlChange();
+}
+
+// Set range from a preset — values in actual mg/m³
+function setChlPreset(minMg, maxMg, label){
+  document.getElementById('chl-min-val').value = minMg.toFixed(3);
+  document.getElementById('chl-max-val').value = maxMg.toFixed(3);
+  document.getElementById('chl-min').value = chlMgToLog(minMg);
+  document.getElementById('chl-max').value = chlMgToLog(maxMg);
+  document.getElementById('chl-min-lbl').textContent = chlFmtMg(minMg);
+  document.getElementById('chl-max-lbl').textContent = chlFmtMg(maxMg);
+  document.querySelectorAll('.chl-preset').forEach(b => b.classList.remove('active-preset'));
+  // Highlight the matching preset button
+  document.querySelectorAll('.chl-preset').forEach(b => {
+    if(b.textContent.includes(label)) b.classList.add('active-preset');
+  });
+  onChlChange();
+}
+
 function onChlChange(){
   satRanges.chl.minLog = parseFloat(document.getElementById('chl-min').value);
   satRanges.chl.maxLog = parseFloat(document.getElementById('chl-max').value);
   satRanges.chl.gamma  = parseFloat(document.getElementById('chl-gamma').value);
   satRanges.chl.alpha  = parseFloat(document.getElementById('chl-alpha').value);
-  document.getElementById('chl-min-lbl').textContent  = Math.pow(10,satRanges.chl.minLog).toFixed(2);
-  document.getElementById('chl-max-lbl').textContent  = Math.pow(10,satRanges.chl.maxLog).toFixed(1);
+  // Sync number inputs if not already set
+  const minMg = chlLogToMg(satRanges.chl.minLog);
+  const maxMg = chlLogToMg(satRanges.chl.maxLog);
+  document.getElementById('chl-min-lbl').textContent  = chlFmtMg(minMg);
+  document.getElementById('chl-max-lbl').textContent  = chlFmtMg(maxMg);
   document.getElementById('chl-gamma-lbl').textContent= satRanges.chl.gamma.toFixed(2)+'×';
   document.getElementById('chl-alpha-lbl').textContent= Math.round(satRanges.chl.alpha*100)+'%';
   layerAlpha.chl = satRanges.chl.alpha;
@@ -1978,11 +2054,15 @@ function onChlChange(){
   document.getElementById('chl-alpha-q-lbl').textContent = Math.round(satRanges.chl.alpha*100)+'%';
   drawSatellite();
 }
+
 function resetChl(){
-  document.getElementById('chl-min').value  ='-2';
-  document.getElementById('chl-max').value  ='1';
-  document.getElementById('chl-gamma').value='1';
-  document.getElementById('chl-alpha').value='0.85';
+  document.getElementById('chl-min').value   = '-2';
+  document.getElementById('chl-max').value   = '1';
+  document.getElementById('chl-gamma').value = '1';
+  document.getElementById('chl-alpha').value = '0.85';
+  document.getElementById('chl-min-val').value = '0.010';
+  document.getElementById('chl-max-val').value = '10.000';
+  document.querySelectorAll('.chl-preset').forEach(b => b.classList.remove('active-preset'));
   onChlChange();
 }
 
