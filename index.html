@@ -3123,6 +3123,42 @@ async function fetchCurrents_CMEMS(pts, dataset) {
   }
 }
 
+// Build grid within pin radius circle
+function buildPinGrid(spacing) {
+  if (!analysisPin) return buildViewportGrid(spacing);
+  const { lat: cLat, lng: cLng } = analysisPin;
+  const radiusMi = parseInt(document.getElementById('pin-radius')?.value || 50);
+  const dLat = radiusMi / 69.0;
+  const dLng = radiusMi / (69.0 * Math.cos(cLat * Math.PI / 180));
+  const pts = [];
+  for (let la = cLat - dLat; la <= cLat + dLat; la += spacing) {
+    for (let ln = cLng - dLng; ln <= cLng + dLng; ln += spacing) {
+      const distMi = Math.sqrt(
+        Math.pow((la - cLat) * 69, 2) +
+        Math.pow((ln - cLng) * 69 * Math.cos(cLat * Math.PI / 180), 2)
+      );
+      if (distMi <= radiusMi) pts.push([parseFloat(la.toFixed(4)), parseFloat(ln.toFixed(4))]);
+    }
+  }
+  return pts;
+}
+
+// Build grid from viewport bounds (fallback when no pin)
+function buildViewportGrid(spacing) {
+  const b = getViewBounds();
+  const pts = [];
+  for (let la = b.south + spacing/2; la < b.north; la += spacing) {
+    for (let ln = b.west + spacing/2; ln < b.east; ln += spacing) {
+      pts.push([parseFloat(la.toFixed(4)), parseFloat(ln.toFixed(4))]);
+    }
+  }
+  if (pts.length > 400) {
+    const step = Math.ceil(pts.length / 400);
+    return pts.filter((_, i) => i % step === 0);
+  }
+  return pts;
+}
+
 async function fetchCurrentData() {
   setDS('loading', `Loading ${CUR_SOURCES[activeCurSrc].label}...`); setFill(0);
   currentGrid = []; document.getElementById('cur-readings').innerHTML = '';
@@ -3647,10 +3683,15 @@ function runAnalysis() {
   btn.disabled = true;
   btn.textContent = '📍 CLICK MAP TO SET AREA';
 
-  // Enter pin-drop mode
+  // Clear any existing pin markers from map (but don't reset button/panel)
+  analysisPin = null;
+  analysisFlowActive = false;
+  if (analysisPinMarker) { map.removeLayer(analysisPinMarker); analysisPinMarker = null; }
+  if (analysisPinCircle) { map.removeLayer(analysisPinCircle); analysisPinCircle = null; }
+  document.getElementById('pin-radius-bar').style.display = 'none';
+
+  // Now enter pin-drop mode
   analysisFlowActive = true;
-  clearAnalysisPin(); // clear any existing pin first
-  analysisFlowActive = true; // re-set after clear
 
   // Show drop banner on map
   document.getElementById('pin-banner').style.display = 'block';
