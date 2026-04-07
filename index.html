@@ -424,6 +424,23 @@ input[type=range].rng.sst-rng::-moz-range-thumb{background:var(--hot);}
   .rng { height: 6px; }
   .rng::-webkit-slider-thumb { width: 20px; height: 20px; }
 }
+/* ── Satellite status banner on map ── */
+#sat-status-banner{position:absolute;top:44px;left:50%;transform:translateX(-50%);z-index:999;
+  background:var(--panel2);border:1px solid var(--border);border-radius:0 0 6px 6px;
+  padding:4px 14px;display:flex;align-items:center;gap:10px;backdrop-filter:blur(8px);
+  font-family:'Space Mono';font-size:8px;color:var(--muted);transition:opacity .3s,transform .3s;
+  max-width:90vw;overflow:hidden;}
+#sat-status-banner.hidden{opacity:0;transform:translateX(-50%) translateY(-10px);pointer-events:none;}
+#sat-status-banner .ssb-dot{width:6px;height:6px;border-radius:50%;flex-shrink:0;}
+#sat-status-banner .ssb-dot.live{background:var(--bait);animation:blink 1.8s infinite;}
+#sat-status-banner .ssb-dot.loading{background:var(--warm);animation:blink .5s infinite;}
+#sat-status-banner .ssb-dot.err{background:var(--hot);}
+#sat-status-banner .ssb-sat{color:var(--teal);font-weight:bold;}
+#sat-status-banner .ssb-date{color:var(--cold);}
+#sat-status-banner .ssb-res{color:var(--warm);}
+#sat-status-banner .ssb-sep{color:var(--border);margin:0 2px;}
+@media(max-width:768px){#sat-status-banner{top:38px;font-size:7px;padding:3px 10px;gap:6px;}}
+
 </style>
 <style>
 
@@ -761,6 +778,18 @@ input[type=range].rng.sst-rng::-moz-range-thumb{background:var(--hot);}
       <button class="date-nav" onclick="shiftDate(1)">›</button>
       <button class="date-nav" onclick="goToYesterday()" title="Jump to yesterday">⟳</button>
       <span style="font-family:'Space Mono';font-size:8px;color:var(--muted)" id="date-status">—</span>
+    </div>
+
+    <!-- Satellite status banner -->
+    <div id="sat-status-banner" class="hidden">
+      <div class="ssb-dot" id="ssb-dot"></div>
+      <span class="ssb-sat" id="ssb-sat">—</span>
+      <span class="ssb-sep">·</span>
+      <span class="ssb-date" id="ssb-date">—</span>
+      <span class="ssb-sep">·</span>
+      <span class="ssb-res" id="ssb-res">—</span>
+      <span class="ssb-sep" id="ssb-err-sep" style="display:none">·</span>
+      <span id="ssb-err-msg" style="color:var(--hot);display:none"></span>
     </div>
 
     <div id="zoom-ctrls">
@@ -1214,6 +1243,60 @@ function imgToDataUrl(img, layerKey, alpha) {
 }
 
 // ═══════════════════════════════════════════
+// ═══════════════════════════════════════════
+// SATELLITE STATUS BANNER (on-map overlay)
+// ═══════════════════════════════════════════
+function updateSatBanner(){
+  const banner = document.getElementById('sat-status-banner');
+  if(!banner) return;
+  const activeLayers = ['chl','sst','tc'].filter(k => satLayers[k]);
+  if(!activeLayers.length){ banner.classList.add('hidden'); return; }
+
+  let bestLayer = null, bestStatus = 'idle';
+  for(const k of activeLayers){
+    const st = satCache[k].status;
+    if(st === 'loading'){ bestLayer = k; bestStatus = 'loading'; break; }
+    if(st === 'live' && !bestLayer){ bestLayer = k; bestStatus = 'live'; }
+    if(st === 'err' && !bestLayer){ bestLayer = k; bestStatus = 'err'; }
+  }
+  if(!bestLayer) bestLayer = activeLayers[0];
+
+  const dot = document.getElementById('ssb-dot');
+  const satEl = document.getElementById('ssb-sat');
+  const dateEl = document.getElementById('ssb-date');
+  const resEl = document.getElementById('ssb-res');
+  const errSep = document.getElementById('ssb-err-sep');
+  const errMsg = document.getElementById('ssb-err-msg');
+
+  let satName = '—', res = '—';
+  if(bestLayer === 'chl'){
+    const src = CHL_SOURCES[activeChlSrc];
+    satName = src ? src.label : 'CHL';
+    res = src ? src.res : '1km';
+  } else if(bestLayer === 'sst'){
+    const src = SST_SOURCES[activeSstSrc];
+    satName = src ? src.label : 'SST';
+    res = src ? src.res : '1km';
+  } else if(bestLayer === 'tc'){
+    satName = 'NOAA-20 VIIRS';
+    res = '250m';
+  }
+  const layerNames = activeLayers.map(k => ({chl:'CHL',sst:'SST',tc:'TC'}[k])).join('+');
+
+  dot.className = 'ssb-dot ' + bestStatus;
+  satEl.textContent = activeLayers.length > 1 ? layerNames + ' · ' + satName : satName;
+  dateEl.textContent = selectedDate;
+  resEl.textContent = res;
+
+  const errLayers = activeLayers.filter(k => satCache[k].status === 'err');
+  if(errLayers.length > 0){
+    errSep.style.display = ''; errMsg.style.display = '';
+    errMsg.textContent = errLayers.map(k => ({chl:'CHL',sst:'SST',tc:'TC'}[k])).join(', ') + ' failed';
+  } else { errSep.style.display = 'none'; errMsg.style.display = 'none'; }
+
+  banner.classList.remove('hidden');
+}
+
 // CURRENT VECTOR ANIMATION — Leaflet Canvas overlay (geo-locked)
 // ═══════════════════════════════════════════
 let animT = 0;
@@ -1560,13 +1643,32 @@ function toggleLayer(key) {
   layers[key] = !layers[key];
   if (layers[key] && key === 'cur' && !currentGrid.length) fetchCurrentData();
   if (layers[key] && key === 'me') {
-    microEddies = detectMicroEddies();
-    updateMicroEddySidebar();
+    const hasCurData = currentGrid.length >= 6;
+    const hasSatData = (satLayers.chl && satCache.chl.img) || (satLayers.sst && satCache.sst.img);
+    if(!hasCurData && !hasSatData){
+      const meList = document.getElementById('me-list');
+      if(meList) meList.innerHTML = '<div style="color:var(--warm);font-size:9px;font-family:\'Space Mono\';line-height:1.7">' +
+        '⚠ No data to detect from yet.<br>' +
+        'Enable one or more:<br>' +
+        '• <strong style="color:var(--cold)">Live Currents</strong> — vorticity detection<br>' +
+        '• <strong style="color:var(--bait)">Chlorophyll-a</strong> or <strong style="color:var(--hot)">SST</strong> — gradient detection<br>' +
+        'Then toggle Micro-Eddies on again.</div>';
+    } else {
+      microEddies = detectMicroEddies();
+      updateMicroEddySidebar();
+      if(!microEddies.length){
+        const meList = document.getElementById('me-list');
+        if(meList) meList.innerHTML = '<div style="color:var(--muted);font-size:9px;font-family:\'Space Mono\';line-height:1.7">' +
+          'No micro-eddies at current sensitivity.<br>' +
+          'Try lowering <strong style="color:var(--teal)">sens</strong> or increasing <strong style="color:var(--teal)">size</strong>.</div>';
+      }
+    }
   }
   document.getElementById('tog-'+key).classList.toggle('on', layers[key]);
   document.getElementById('btn-'+key).classList.toggle('active', layers[key]);
   if (!layers[key]) {
     if (key === 'edy' && eddyLayer) { map && map.removeLayer(eddyLayer); eddyLayer = null; }
+    if (key === 'me') { microEddies = []; updateMicroEddySidebar(); }
   }
 }
 
@@ -1943,6 +2045,7 @@ function setSatStatus(layer, state, msg){
   const badge=document.getElementById('sb-'+layer);
   badge.className='sat-badge '+state;
   document.getElementById('sl-'+layer).textContent=msg;
+  updateSatBanner();
 }
 
 async function loadSatLayer(layerKey){
@@ -1991,7 +2094,12 @@ async function loadSatLayer(layerKey){
       document.getElementById('date-status').textContent=data.date;
     }catch(e){
       satCache[layerKey]={img:null,key:'',status:'err'};
-      setSatStatus(layerKey,'err',`${src.label}: ${e.message.slice(0,45)}`);
+      let errDetail = e.message || 'Unknown error';
+      if(errDetail.includes('timeout')) errDetail = 'Download timed out — NASA/NOAA servers slow. Retry in a minute.';
+      else if(errDetail.includes('Proxy') || errDetail.includes('500')) errDetail = 'Data server unavailable. Try a different source or retry.';
+      else if(errDetail.includes('204') || errDetail.includes('No data')) errDetail = 'No imagery for this date — satellite may not have passed yet. Try yesterday.';
+      else errDetail = errDetail.slice(0,50) + ' — try different date or source.';
+      setSatStatus(layerKey,'err',`${src.label}: ${errDetail}`);
       console.warn('CoastWatch load failed:',e.message);
     }
     return;
@@ -2002,7 +2110,7 @@ async function loadSatLayer(layerKey){
   satCache[layerKey].status='loading';
   const layerName=GIBS_LAYERS[layerKey];
   if(!layerName){
-    setSatStatus(layerKey,'err','No layer configured'); return;
+    setSatStatus(layerKey,'err','No satellite layer configured for this source. Select a different source above.'); return;
   }
 
   // Try selected date then up to 3 days back (GIBS NRT has 1-2 day lag)
@@ -2046,7 +2154,8 @@ async function loadSatLayer(layerKey){
       setSatStatus(layerKey,'live',`${selectedDate} · NASA GIBS`);
     }catch(e2){
       satCache[layerKey]={img:null,key:'',status:'err'};
-      setSatStatus(layerKey,'err',`No data — cloud cover or processing lag`);
+      const srcLbl2 = layerKey==='chl' && CHL_SOURCES[activeChlSrc] ? CHL_SOURCES[activeChlSrc].label : layerKey==='sst' && SST_SOURCES[activeSstSrc] ? SST_SOURCES[activeSstSrc].label : 'NASA GIBS';
+      setSatStatus(layerKey,'err',`${srcLbl2}: No imagery — likely cloud cover or processing lag. Try ← previous day or a different source.`);
     }
   }
 }
