@@ -448,7 +448,7 @@ input[type=range].rng.sst-rng::-moz-range-thumb{background:var(--hot);}
 
       <!-- Chlorophyll -->
       <!-- Chlorophyll with multi-source picker -->
-      <div class="layer-btn active" id="btn-chl" onclick="toggleSat('chl')">
+      <div class="layer-btn" id="btn-chl" onclick="toggleSat('chl')">
         <div class="lb-left">
           <div class="lb-dot" style="background:#5dffaa;box-shadow:0 0 5px #5dffaa66"></div>
           <span>Chlorophyll-a</span>
@@ -481,7 +481,7 @@ input[type=range].rng.sst-rng::-moz-range-thumb{background:var(--hot);}
       </div>
 
       <!-- SST with multi-source picker -->
-      <div class="layer-btn active" id="btn-sst" onclick="toggleSat('sst')">
+      <div class="layer-btn" id="btn-sst" onclick="toggleSat('sst')">
         <div class="lb-left">
           <div class="lb-dot" style="background:#ff4e2a;box-shadow:0 0 5px #ff4e2a66"></div>
           <span>Sea Surface Temp</span>
@@ -544,7 +544,7 @@ input[type=range].rng.sst-rng::-moz-range-thumb{background:var(--hot);}
     <div class="sb-sec">
       <div class="sb-ttl">Ocean Layers</div>
 
-      <div class="layer-btn active" id="btn-cur" onclick="toggleLayer('cur')">
+      <div class="layer-btn" id="btn-cur" onclick="toggleLayer('cur')">
         <div class="lb-left">
           <div class="lb-dot" style="background:#4ac8ff;box-shadow:0 0 5px #4ac8ff66"></div>
           <span>★ Live Currents</span>
@@ -553,7 +553,7 @@ input[type=range].rng.sst-rng::-moz-range-thumb{background:var(--hot);}
         <div class="tog" id="tog-cur"></div>
       </div>
 
-      <div class="layer-btn active" id="btn-edy" onclick="toggleLayer('edy')">
+      <div class="layer-btn" id="btn-edy" onclick="toggleLayer('edy')">
         <div class="lb-left">
           <div class="lb-dot" style="background:#ff88ff;box-shadow:0 0 5px #ff88ff66"></div>
           <span>Eddies</span>
@@ -563,7 +563,7 @@ input[type=range].rng.sst-rng::-moz-range-thumb{background:var(--hot);}
       </div>
 
 
-      <div class="layer-btn active" id="btn-me" onclick="toggleLayer('me')">
+      <div class="layer-btn" id="btn-me" onclick="toggleLayer('me')">
         <div class="lb-left">
           <div class="lb-dot" style="background:#ff6600;box-shadow:0 0 5px #ff660066"></div>
           <span>Micro-Eddies &lt;5mi</span>
@@ -572,7 +572,7 @@ input[type=range].rng.sst-rng::-moz-range-thumb{background:var(--hot);}
         <div class="tog" id="tog-me"></div>
       </div>
 
-      <div class="layer-btn active" id="btn-frt" onclick="toggleLayer('frt')">
+      <div class="layer-btn" id="btn-frt" onclick="toggleLayer('frt')">
         <div class="lb-left">
           <div class="lb-dot" style="background:#ff44ff;box-shadow:0 0 5px #ff44ff66"></div>
           <span>SST &amp; Chl Fronts</span>
@@ -912,7 +912,7 @@ let bgCache=null, bgCacheKey='', contourCache=null, contourCacheKey='';
 
 // Satellite image cache per layer
 const satCache = {chl:{img:null,key:'',status:'idle'}, sst:{img:null,key:'',status:'idle'}, tc:{img:null,key:'',status:'idle'}};
-const satLayers = {chl:true, sst:true, tc:false};
+const satLayers = {chl:false, sst:false, tc:false}; // all off at startup
 let noaaChartOn = true; // always on
 let noaaChartCache = {img:null, key:''};
 const layers    = {cur:false, edy:false, frt:false, me:false}; // all off at startup
