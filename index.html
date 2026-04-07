@@ -4090,6 +4090,20 @@ window.addEventListener('load', () => {
   <div id="mobile-panel-content"></div>
 </div>
 
+<script type="module">
+      import { CurrentLayer, buildConfidenceBadge } from './currentLayer.js';
 
+      const layer = new CurrentLayer(map, {
+        onConfidenceChange: (meta) => {
+          document.getElementById('current-badge').innerHTML = buildConfidenceBadge(meta);
+        }
+      });
+
+      map.on('moveend', () => layer.refresh());
+      layer.refresh();
+    </script>
+
+  </body>
+</html>
 </body>
 </html>
