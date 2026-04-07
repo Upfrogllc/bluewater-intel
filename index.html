@@ -428,8 +428,9 @@ input[type=range].rng.sst-rng::-moz-range-thumb{background:var(--hot);}
 <style>
 
 /* Leaflet map styles */
-#mapwrap { position: relative; flex: 1; overflow: hidden; }
-.leaflet-container { width: 100%; height: 100%; background: #020c16; }
+#mapwrap { position: relative; flex: 1; overflow: hidden; min-height: 0; }
+.leaflet-container { width: 100% !important; height: 100% !important; background: #020c16; }
+#mapwrap > .leaflet-container { position: absolute; top: 0; left: 0; right: 0; bottom: 0; }
 .leaflet-control-attribution { 
   background: rgba(2,12,22,0.75) !important; 
   color: #4a7a9b !important; 
@@ -1730,7 +1731,7 @@ function setSatStatus(layer, state, msg){
 async function loadSatLayer(layerKey){
   if(!satLayers[layerKey]) return;
   const b=getViewBounds();
-  const W=satCvs.width, H=satCvs.height;
+  const mapEl=document.getElementById("mapwrap"); const W=mapEl?mapEl.clientWidth:800, H=mapEl?mapEl.clientHeight:600;
   const cacheKey=`${layerKey}_${selectedDate}_${b.west.toFixed(3)}_${b.south.toFixed(3)}_${b.east.toFixed(3)}_${b.north.toFixed(3)}_${W}_${H}`;
   if(satCache[layerKey].key===cacheKey && satCache[layerKey].img) return;
 
@@ -2062,7 +2063,7 @@ function detectEddies(){
 // ═══════════════════════════════════════════
 
 function detectMicroEddies(){
-  const W = satCvs.width, H = satCvs.height;
+  const mapEl2=document.getElementById("mapwrap"); const W = mapEl2?mapEl2.clientWidth:800, H = mapEl2?mapEl2.clientHeight:600;
   if(!W || !H) return [];
 
   const sens   = parseFloat(document.getElementById('me-sens')?.value || '3.5');
@@ -2244,7 +2245,7 @@ function updateMicroEddySidebar(){
 // ═══════════════════════════════════════════
 
 function detectFronts(){
-  const W = satCvs.width, H = satCvs.height;
+  const mapEl2=document.getElementById("mapwrap"); const W = mapEl2?mapEl2.clientWidth:800, H = mapEl2?mapEl2.clientHeight:600;
   if(!W || !H) return {sst:[], chl:[]};
 
   const thresh = parseInt(document.getElementById('frt-thresh')?.value || '6');
@@ -2576,7 +2577,7 @@ function getSatPixelData(cx, cy){
     const tmp = document.createElement('canvas');
     tmp.width=1; tmp.height=1;
     const tc=tmp.getContext('2d');
-    tc.drawImage(satCvs, cx, cy, 1, 1, 0, 0, 1, 1);
+    // sat pixel sampling removed (Leaflet tile map); tc.clearRect(0,0,1,1);
     const px=tc.getImageData(0,0,1,1).data;
     if(px[3]>10){
       // Try to estimate SST from hue
@@ -2625,10 +2626,7 @@ function bearingDeg(la1,lo1,la2,lo2){
 // ── Draw measure overlay on mapCanvas ────────────────────────────
 
 
-// ═══════════════════════════════════════════
-// INTERACTION
-// ═══════════════════════════════════════════
-function zoom(f){vp.scale=Math.max(0.1,Math.min(20,vp.scale*f));}
+// (canvas INTERACTION block removed — Leaflet handles pan/zoom)
 
 
 // ═══════════════════════════════════════════
@@ -3268,12 +3266,7 @@ function drawWaveChart(waveH, swellH, times){
 // ═══════════════════════════════════════════
 // INIT
 // ═══════════════════════════════════════════
-window.addEventListener('load',()=>{
-  initSpeciesUI();
-  updateAnalyzeBtn();
-  // Only load the nav chart on startup — everything else is user-triggered
-  setTimeout(()=>{ loadNOAAChart(); }, 300);
-});
+// (init moved to bottom — see Leaflet init block)
 
 // ═══════════════════════════════════════════
 // MOBILE NAVIGATION
