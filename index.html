@@ -3658,9 +3658,11 @@ async function confirmPinAndFetch() {
 
   const chlCount = currentGrid.filter(p => p.chl != null).length;
   const sstCount = currentGrid.filter(p => p.sst_f != null).length;
+  const chlSrc = satData?.chl_source || 'none';
+  const sstSrc = satData?.sst_source || 'none';
 
   // ── STEP 3: Score grid ──
-  setStep(done(`Currents live — ${currentGrid.length} pts`) + done(`Satellite: ${chlCount} chl pts, ${sstCount} SST pts`) + active('Scoring grid points against species thresholds...') + waiting('Claude analyzing top spots...'));
+  setStep(done(`Currents live — ${currentGrid.length} pts`) + done(`CHL: ${chlCount} pts (${chlSrc}) · SST: ${sstCount} pts (${sstSrc})`) + active('Scoring grid points against species thresholds...') + waiting('Claude analyzing top spots...'));
 
   const scored = scoreGrid(currentGrid);
   const topCandidates = scored.slice(0, 10);
@@ -3680,7 +3682,7 @@ async function confirmPinAndFetch() {
     document.getElementById('abtn').disabled = false; updateAnalyzeBtn(); return;
   }
 
-  setStep(done(`Currents live — ${currentGrid.length} pts`) + done(`Satellite: ${chlCount} chl pts, ${sstCount} SST pts`) + done(`Grid scored — ${validCandidates.length} valid candidates`) + active('Claude analyzing top spots...'));
+  setStep(done(`Currents live — ${currentGrid.length} pts`) + done(`CHL: ${chlCount} pts · SST: ${sstCount} pts`) + done(`Grid scored — ${validCandidates.length} valid candidates`) + active('Claude analyzing top spots...'));
 
   await runAIAnalysis(validCandidates.slice(0, 10));
 }
