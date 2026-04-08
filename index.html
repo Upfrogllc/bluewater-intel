@@ -849,12 +849,15 @@ input[type=range].rng.sst-rng::-moz-range-thumb{background:var(--hot);}
     </div>
 
     <!-- Radius control — appears after pin is dropped -->
-    <div id="pin-radius-bar" style="display:none;position:absolute;bottom:70px;left:50%;transform:translateX(-50%);z-index:1100;background:var(--panel2);border:1px solid var(--warm);border-radius:8px;padding:10px 16px;backdrop-filter:blur(10px);display:none;align-items:center;gap:10px;white-space:nowrap">
-      <span style="font-family:'Space Mono';font-size:9px;color:var(--warm)">📍 SEARCH RADIUS</span>
-      <input type="range" class="rng" id="pin-radius" min="10" max="150" step="5" value="50" oninput="onPinRadiusChange()" style="width:120px">
-      <span class="rng-vals" id="pin-radius-lbl">50mi</span>
-      <button onclick="clearAnalysisPin()" style="font-family:'Space Mono';font-size:8px;color:var(--muted);background:transparent;border:1px solid var(--border);border-radius:3px;padding:3px 8px;cursor:pointer">✕</button>
-      <button id="confirm-pin-btn" onclick="confirmPinAndFetch()" style="font-family:'Bebas Neue';font-size:14px;letter-spacing:1px;color:var(--deep);background:var(--teal);border:none;border-radius:5px;padding:5px 14px;cursor:pointer">CONFIRM →</button>
+    <div id="pin-radius-bar" style="display:none;position:absolute;bottom:70px;left:50%;transform:translateX(-50%);z-index:1100;background:var(--panel2);border:1px solid var(--warm);border-radius:8px;padding:10px 16px;backdrop-filter:blur(10px);flex-direction:column;gap:8px;align-items:center">
+      <div style="display:flex;align-items:center;gap:10px;white-space:nowrap">
+        <span style="font-family:'Space Mono';font-size:9px;color:var(--warm)">📍 SEARCH RADIUS</span>
+        <input type="range" class="rng" id="pin-radius" min="10" max="150" step="5" value="50" oninput="onPinRadiusChange()" style="width:120px">
+        <span class="rng-vals" id="pin-radius-lbl">50mi</span>
+        <button onclick="clearAnalysisPin()" style="font-family:'Space Mono';font-size:8px;color:var(--muted);background:transparent;border:1px solid var(--border);border-radius:3px;padding:3px 8px;cursor:pointer">✕</button>
+        <button id="confirm-pin-btn" onclick="confirmPinAndFetch()" style="font-family:'Bebas Neue';font-size:14px;letter-spacing:1px;color:var(--deep);background:var(--teal);border:none;border-radius:5px;padding:5px 14px;cursor:pointer">CONFIRM →</button>
+      </div>
+      <div id="pin-depth-info" style="font-family:'Space Mono';font-size:8px;text-align:center;line-height:1.6"></div>
     </div>
 
     <!-- Spot data popup -->
@@ -3566,6 +3569,27 @@ function dropAnalysisPin(lat, lng) {
   document.getElementById('pin-banner').style.display = 'none';
   const bar = document.getElementById('pin-radius-bar');
   bar.style.display = 'flex';
+
+  // Show depth at pin location + warning if too deep for selected species
+  const pinDepth = depthAt(lat, lng);
+  const selSp = SPECIES.filter(s => selectedSpecies.has(s.id));
+  const depthInfo = document.getElementById('pin-depth-info');
+  if (pinDepth && pinDepth > 5) {
+    const tooDeep = selSp.every(s => {
+      const t = SPECIES_THRESHOLDS[s.id];
+      return t && pinDepth > t.depth_max;
+    });
+    const tooShallow = selSp.every(s => {
+      const t = SPECIES_THRESHOLDS[s.id];
+      return t && pinDepth < t.depth_min;
+    });
+    const depthColor = tooDeep || tooShallow ? '#ff4e2a' : '#5dffaa';
+    const depthWarn  = tooDeep   ? ' ⚠️ Too deep for selected species — move pin closer to shore' :
+                       tooShallow ? ' ⚠️ Too shallow — move pin further offshore' : ' ✓ Good depth range';
+    depthInfo.innerHTML = `<span style="color:${depthColor}">Pin depth: ~${Math.round(pinDepth)}ft${depthWarn}</span>`;
+  } else {
+    depthInfo.innerHTML = `<span style="color:var(--muted)">Pin on land or no depth data</span>`;
+  }
 }
 
 function onPinRadiusChange() {
@@ -3641,10 +3665,24 @@ async function confirmPinAndFetch() {
   const scored = scoreGrid(currentGrid);
   const topCandidates = scored.slice(0, 10);
 
-  // ── STEP 4: Claude analysis ──
-  setStep(done(`Currents live — ${currentGrid.length} pts`) + done(`Satellite: ${chlCount} chl pts, ${sstCount} SST pts`) + done(`Grid scored — top candidate: ${topCandidates[0]?.score.toFixed(1)} pts`) + active('Claude analyzing top candidates...'));
+  // Check if any candidates meet the minimum depth threshold
+  const validCandidates = scored.filter(p => p.score > 5);
+  if (!validCandidates.length) {
+    const selSp = SPECIES.filter(s => selectedSpecies.has(s.id));
+    const depthRanges = selSp.map(s => `${s.label}: ${SPECIES_THRESHOLDS[s.id]?.depth_min||0}–${SPECIES_THRESHOLDS[s.id]?.depth_max||9999}ft`).join(', ');
+    document.getElementById('aibody').innerHTML = `<div class="aimt"><div class="aimt-ico">📍</div><div class="aimt-txt" style="text-align:left">
+      <strong style="color:var(--warm)">No suitable water found in this area.</strong><br><br>
+      All ${currentGrid.length} grid points are outside the depth range for your selected species.<br><br>
+      <span style="color:var(--muted);font-size:9px">Required depths: ${depthRanges}</span><br><br>
+      Move your pin to shallower water closer to the reef edge and try again.<br><br>
+      <button onclick="clearAnalysisPin()" style="padding:6px 14px;border-radius:5px;border:1px solid var(--teal);background:transparent;color:var(--teal);font-family:'Space Mono';font-size:9px;cursor:pointer">↩ Re-Drop Pin</button>
+    </div></div>`;
+    document.getElementById('abtn').disabled = false; updateAnalyzeBtn(); return;
+  }
 
-  await runAIAnalysis(topCandidates);
+  setStep(done(`Currents live — ${currentGrid.length} pts`) + done(`Satellite: ${chlCount} chl pts, ${sstCount} SST pts`) + done(`Grid scored — ${validCandidates.length} valid candidates`) + active('Claude analyzing top spots...'));
+
+  await runAIAnalysis(validCandidates.slice(0, 10));
 }
 
 // ── Fetch satellite data from our Netlify ocean-grid function ──
@@ -3694,13 +3732,14 @@ function scoreGrid(grid) {
     const reasons = [];
 
     for (const t of thresholds) {
-      // Depth score (0–30 pts) — hard filter outside range
-      if (depth >= t.depth_min && depth <= t.depth_max) {
-        const dMid = (t.depth_min + t.depth_max) / 2;
-        const dRange = (t.depth_max - t.depth_min) / 2 || t.depth_min;
-        score += 30 * (1 - Math.min(1, Math.abs(depth - dMid) / dRange));
-        reasons.push(`depth ${Math.round(depth)}ft ✓`);
+      // Depth — HARD filter: zero score if outside range entirely
+      if (depth < t.depth_min || depth > t.depth_max) {
+        // This candidate is disqualified for this species
+        continue;
       }
+      const dMid = (t.depth_min + Math.min(t.depth_max, t.depth_min * 4)) / 2;
+      score += 30 * (1 - Math.min(1, Math.abs(depth - dMid) / Math.max(1, dMid)));
+      reasons.push(`depth ${Math.round(depth)}ft ✓`);
 
       // SST score (0–35 pts)
       if (sst !== null) {
