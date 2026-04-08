@@ -3599,39 +3599,142 @@ async function confirmPinAndFetch() {
   map.getContainer().style.cursor = '';
   analysisFlowActive = false;
 
-  // Show loading state in AI panel
-  document.getElementById('aibody').innerHTML = `<div style="padding:14px">
-    <div class="ldstep"><div class="spin"></div>Fetching currents within ${document.getElementById('pin-radius-lbl').textContent}...</div>
-    <div class="ldb"><div class="ldf"></div></div>
-    <div class="ldstep" style="opacity:.4"><div class="spin"></div>Reading satellite data...</div>
-    <div class="ldb"><div class="ldf" style="animation-delay:.5s"></div></div>
-    <div class="ldstep" style="opacity:.4"><div class="spin"></div>Claude identifying hotspots...</div>
-    <div class="ldb"><div class="ldf" style="animation-delay:1s"></div></div>
-  </div>`;
+  const setStep = (steps) => {
+    document.getElementById('aibody').innerHTML = `<div style="padding:14px">${steps}</div>`;
+  };
+  const done  = (txt) => `<div class="ldstep" style="color:var(--bait)">✓ ${txt}</div><div class="ldb"><div class="ldf" style="width:100%;animation:none;background:var(--bait)"></div></div>`;
+  const active = (txt) => `<div class="ldstep"><div class="spin"></div>${txt}</div><div class="ldb"><div class="ldf"></div></div>`;
+  const waiting = (txt) => `<div class="ldstep" style="opacity:.35">${txt}</div><div class="ldb"><div class="ldf" style="animation:none"></div></div>`;
 
-  // Step 3a — fetch currents within the pin radius
+  // ── STEP 1: Fetch currents ──
+  setStep(active('Fetching currents within ' + document.getElementById('pin-radius-lbl').textContent + '...') + waiting('Fetching satellite chlorophyll + SST...') + waiting('Scoring grid points...') + waiting('Claude analyzing top spots...'));
   await fetchCurrentData();
 
-  // Step 3b — check we got current data
   if (!currentGrid.length) {
-    document.getElementById('aibody').innerHTML = `<div class="aimt"><div class="aimt-ico">⚠️</div><div class="aimt-txt">Could not fetch current data.<br><small style="color:var(--muted)">Try a different current source or move the pin closer to shore.</small><br><br><button onclick="clearAnalysisPin()" style="padding:6px 14px;border-radius:5px;border:1px solid var(--teal);background:transparent;color:var(--teal);font-family:'Space Mono';font-size:9px;cursor:pointer">↩ Start Over</button></div></div>`;
-    const btn = document.getElementById('abtn');
-    btn.disabled = false; updateAnalyzeBtn();
-    return;
+    document.getElementById('aibody').innerHTML = `<div class="aimt"><div class="aimt-ico">⚠️</div><div class="aimt-txt">Could not fetch current data.<br><small style="color:var(--muted)">Try a different source or move the pin.</small><br><br><button onclick="clearAnalysisPin()" style="padding:6px 14px;border-radius:5px;border:1px solid var(--teal);background:transparent;color:var(--teal);font-family:'Space Mono';font-size:9px;cursor:pointer">↩ Start Over</button></div></div>`;
+    document.getElementById('abtn').disabled = false; updateAnalyzeBtn(); return;
   }
 
-  // Step 3c — currents live, update loading display
-  document.getElementById('aibody').innerHTML = `<div style="padding:14px">
-    <div class="ldstep" style="color:var(--bait)">✓ Currents live — ${currentGrid.length} pts</div>
-    <div class="ldb"><div class="ldf" style="width:100%;animation:none;background:var(--bait)"></div></div>
-    <div class="ldstep"><div class="spin"></div>Reading satellite data...</div>
-    <div class="ldb"><div class="ldf" style="animation-delay:.2s"></div></div>
-    <div class="ldstep" style="opacity:.4"><div class="spin"></div>Claude identifying hotspots...</div>
-    <div class="ldb"><div class="ldf" style="animation-delay:.8s"></div></div>
-  </div>`;
+  // ── STEP 2: Fetch satellite data ──
+  setStep(done(`Currents live — ${currentGrid.length} pts`) + active('Fetching satellite chlorophyll + SST from ERDDAP...') + waiting('Scoring grid points...') + waiting('Claude analyzing top spots...'));
 
-  // Step 3d — run AI analysis
-  await runAIAnalysis();
+  const gridPoints = currentGrid.map(p => [p.lat, p.lng]);
+  const satData = await fetchOceanGrid(gridPoints);
+
+  // Merge satellite data back into currentGrid
+  if (satData) {
+    for (const sp of satData.points) {
+      const gp = currentGrid.find(p => Math.abs(p.lat - sp.lat) < 0.01 && Math.abs(p.lng - sp.lng) < 0.01);
+      if (gp) {
+        if (sp.chl_mg_m3 !== null) gp.chl = sp.chl_mg_m3;
+        if (sp.sst_c   !== null) { gp.sst_c = sp.sst_c; gp.sst_f = sp.sst_f; }
+      }
+    }
+  }
+
+  const chlCount = currentGrid.filter(p => p.chl != null).length;
+  const sstCount = currentGrid.filter(p => p.sst_f != null).length;
+
+  // ── STEP 3: Score grid ──
+  setStep(done(`Currents live — ${currentGrid.length} pts`) + done(`Satellite: ${chlCount} chl pts, ${sstCount} SST pts`) + active('Scoring grid points against species thresholds...') + waiting('Claude analyzing top spots...'));
+
+  const scored = scoreGrid(currentGrid);
+  const topCandidates = scored.slice(0, 10);
+
+  // ── STEP 4: Claude analysis ──
+  setStep(done(`Currents live — ${currentGrid.length} pts`) + done(`Satellite: ${chlCount} chl pts, ${sstCount} SST pts`) + done(`Grid scored — top candidate: ${topCandidates[0]?.score.toFixed(1)} pts`) + active('Claude analyzing top candidates...'));
+
+  await runAIAnalysis(topCandidates);
+}
+
+// ── Fetch satellite data from our Netlify ocean-grid function ──
+async function fetchOceanGrid(points) {
+  try {
+    const res = await fetch('/.netlify/functions/ocean-grid', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ points, date: selectedDate })
+    });
+    if (!res.ok) return null;
+    return await res.json();
+  } catch(e) {
+    console.warn('Ocean grid fetch failed:', e.message);
+    return null;
+  }
+}
+
+// ── Species thresholds for scoring ──
+const SPECIES_THRESHOLDS = {
+  blue_marlin:  { sst_min:76, sst_max:86, depth_min:800,  depth_max:99999, chl_min:0.01, chl_max:0.3  },
+  white_marlin: { sst_min:72, sst_max:82, depth_min:400,  depth_max:99999, chl_min:0.05, chl_max:0.5  },
+  sailfish:     { sst_min:74, sst_max:84, depth_min:80,   depth_max:600,   chl_min:0.1,  chl_max:0.8  },
+  swordfish:    { sst_min:65, sst_max:78, depth_min:1200, depth_max:99999, chl_min:0.05, chl_max:0.5  },
+  mahi:         { sst_min:75, sst_max:85, depth_min:80,   depth_max:800,   chl_min:0.15, chl_max:2.0  },
+  wahoo:        { sst_min:74, sst_max:84, depth_min:200,  depth_max:1200,  chl_min:0.05, chl_max:0.4  },
+  yellowfin:    { sst_min:72, sst_max:82, depth_min:400,  depth_max:99999, chl_min:0.1,  chl_max:0.6  },
+  blackfin:     { sst_min:70, sst_max:80, depth_min:150,  depth_max:600,   chl_min:0.1,  chl_max:1.0  },
+  kingfish:     { sst_min:68, sst_max:80, depth_min:40,   depth_max:200,   chl_min:0.2,  chl_max:2.0  },
+  cobia:        { sst_min:68, sst_max:82, depth_min:40,   depth_max:300,   chl_min:0.15, chl_max:2.0  },
+  dolphin:      { sst_min:75, sst_max:85, depth_min:80,   depth_max:600,   chl_min:0.15, chl_max:2.0  },
+  tripletail:   { sst_min:72, sst_max:84, depth_min:20,   depth_max:150,   chl_min:0.1,  chl_max:1.5  },
+};
+
+function scoreGrid(grid) {
+  const selSp = [...selectedSpecies];
+  const thresholds = selSp.map(id => SPECIES_THRESHOLDS[id]).filter(Boolean);
+  if (!thresholds.length) return [];
+
+  return grid.map(pt => {
+    const depth = depthAt(pt.lat, pt.lng) || 0;
+    const sst   = pt.sst_f || (pt.sst_c ? pt.sst_c * 9/5 + 32 : null);
+    const chl   = pt.chl   || null;
+    const spd   = pt.speed_kt || 0;
+
+    let score = 0;
+    const reasons = [];
+
+    for (const t of thresholds) {
+      // Depth score (0–30 pts) — hard filter outside range
+      if (depth >= t.depth_min && depth <= t.depth_max) {
+        const dMid = (t.depth_min + t.depth_max) / 2;
+        const dRange = (t.depth_max - t.depth_min) / 2 || t.depth_min;
+        score += 30 * (1 - Math.min(1, Math.abs(depth - dMid) / dRange));
+        reasons.push(`depth ${Math.round(depth)}ft ✓`);
+      }
+
+      // SST score (0–35 pts)
+      if (sst !== null) {
+        if (sst >= t.sst_min && sst <= t.sst_max) {
+          const sMid = (t.sst_min + t.sst_max) / 2;
+          score += 35 * (1 - Math.min(1, Math.abs(sst - sMid) / ((t.sst_max - t.sst_min) / 2)));
+          reasons.push(`SST ${sst.toFixed(1)}°F ✓`);
+        }
+      }
+
+      // Chlorophyll score (0–25 pts)
+      if (chl !== null) {
+        if (chl >= t.chl_min && chl <= t.chl_max) {
+          const cMid = (t.chl_min + t.chl_max) / 2;
+          score += 25 * (1 - Math.min(1, Math.abs(chl - cMid) / ((t.chl_max - t.chl_min) / 2)));
+          reasons.push(`chl ${chl.toFixed(3)} mg/m³ ✓`);
+        }
+      } else {
+        score += 8; // partial credit when no chl data
+      }
+
+      if (!sst) score += 10; // partial when no SST data
+    }
+
+    // Current speed bonus (0–10 pts) — some current is good
+    if (spd > 0.1 && spd < 3.0) score += 10 * (1 - Math.abs(spd - 1.0) / 2.0);
+
+    // Average across species
+    score /= thresholds.length;
+
+    return { ...pt, depth, sst, chl, score: parseFloat(score.toFixed(2)), reasons };
+  })
+  .filter(pt => pt.depth > 5) // exclude land/shoal
+  .sort((a, b) => b.score - a.score);
 }
 
 // ═══════════════════════════════════════════
@@ -3719,107 +3822,97 @@ function runAnalysis() {
   </div>`;
 }
 
-// Step 2 (internal) — called after currents fetched, runs the actual AI call
-async function runAIAnalysis() {
+// Step 4 — AI analysis using scored grid candidates
+async function runAIAnalysis(scoredCandidates) {
   const btn = document.getElementById('abtn');
   const region  = detectRegionFromMap();
   const season  = getCurrentSeason();
   const sb      = getSearchBounds();
-  const today   = new Date().toISOString().slice(0, 10);
   const month   = ['January','February','March','April','May','June','July','August','September','October','November','December'][new Date().getMonth()];
 
-  const primarySpeciesId = [...selectedSpecies][0];
-  const promptSpeciesId  = SPECIES_PROMPT_MAP[primarySpeciesId] || 'SAILFISH';
-  const selSp  = SPECIES.filter(s => selectedSpecies.has(s.id));
+  const selSp   = SPECIES.filter(s => selectedSpecies.has(s.id));
   const spNames = selSp.map(s => s.label).join(', ');
 
   const DIRS = ['N','NNE','NE','ENE','E','ESE','SE','SSE','S','SSW','SW','WSW','W','WNW','NW','NNW'];
-  const sstData     = buildSSTSummary();
   const currentData = buildCurrentSummary();
   const eddies      = buildEddySummary();
-
   let avgSpd = currentData ? currentData.speed_kt.toFixed(2) : '0';
   let domDir = currentData ? DIRS[Math.round(currentData.dir_deg/22.5)%16] : 'NNE';
 
-  const satContext = `NASA/CoastWatch satellite imagery (${selectedDate}): Chlorophyll source: ${CHL_SOURCES[activeChlSrc]?.label||'NOAA-20'} (${CHL_SOURCES[activeChlSrc]?.res||'1km'}). MUR SST daily gap-filled.`;
-  const curSummaryTxt = currentData ? `Source: ${currentData.source} — avg ${currentData.speed_kt}kt flowing ${DIRS[Math.round(currentData.dir_deg/22.5)%16]}` : 'No current data.';
+  // Use scored candidates if provided, otherwise fall back to raw current points
+  const candidates = scoredCandidates || currentGrid.slice(0,10).map(p => ({
+    ...p, depth: depthAt(p.lat, p.lng)||0,
+    sst: p.sst_f || (p.sst_c ? p.sst_c*9/5+32 : null),
+    chl: p.chl || null, score: 0, reasons: []
+  }));
+
+  const candidateBlock = candidates.slice(0,10).map((p, i) => {
+    const dir    = DIRS[Math.round((p.dir_deg||0)/22.5)%16];
+    const chlStr = p.chl  != null ? `${p.chl.toFixed(3)} mg/m³`      : 'no chl data';
+    const sstStr = p.sst  != null ? `${p.sst.toFixed(1)}°F`           : (p.sst_c != null ? `${(p.sst_c*9/5+32).toFixed(1)}°F` : 'no SST data');
+    const depStr = p.depth > 0    ? `${Math.round(p.depth)}ft`        : 'unknown depth';
+    return `#${i+1} [score:${p.score}] ${p.lat.toFixed(4)}°N, ${p.lng.toFixed(4)}°W | depth:${depStr} | SST:${sstStr} | chl:${chlStr} | current:${(p.speed_kt||0).toFixed(2)}kt ${dir}`;
+  }).join('\n');
+
   const eddyContext = eddies.length > 0 ? 'EDDIES: ' + eddies.map(e=>e.description).join('; ') : 'No eddies detected.';
 
-  // No fishing report fetch — analyze ocean data only
-  const reportSignal = null;
+  const systemPrompt = `You are a marine biologist and offshore fishing expert. You receive pre-scored ocean grid data with real measured values (depth from NOAA charts, SST from MUR L4 satellite, chlorophyll from VIIRS, currents from Open-Meteo) and select the best fishing spots. Explain your reasoning using the specific data values provided. Respond ONLY with valid JSON.`;
 
-  let systemPrompt, userPrompt;
-  if (typeof buildSystemPrompt === 'function') {
-    systemPrompt = buildSystemPrompt(promptSpeciesId, region);
-    userPrompt   = buildAnalysisPrompt({ speciesId: promptSpeciesId, region, bounds: { north:sb.north, south:sb.south, east:sb.east, west:sb.west }, sstData, chlorData: null, currentData, fronts: [], eddies, date: today, season, reportSignal, numHotspots: 4 });
-  } else {
-    systemPrompt = `You are a marine data analyst identifying fishing hotspots from sensor data. You have NO knowledge of named fishing locations — you derive every hotspot purely from the numerical ocean data provided. Never use names like "Juno Ledge", "Jupiter Inlet", "Palm Beach Reef" or any named location from memory. Every coordinate must come from interpolating the actual data points given. Respond ONLY with valid JSON.`;
-    const currentPts = currentGrid.slice(0,8).map(p=>`  ${p.lat.toFixed(4)}°N, ${p.lng.toFixed(4)}°W → ${p.speed_kt.toFixed(2)}kt ${DIRS[Math.round(p.dir_deg/22.5)%16]}${p.sst_c ? ` | SST ${(p.sst_c*9/5+32).toFixed(1)}°F` : ''}`).join('\n');
-    userPrompt = `OCEAN DATA ANALYSIS — identify 4 fishing hotspots for ${spNames}.
+  const userPrompt = `Select the 4 best fishing hotspots for ${spNames} from these pre-scored candidates.
 
-SEARCH AREA:
-  Lat: ${sb.south.toFixed(4)} to ${sb.north.toFixed(4)}°N
-  Lng: ${sb.west.toFixed(4)} to ${sb.east.toFixed(4)} (negative = west longitude)
-  Center: ${sb.centerLat.toFixed(4)}°N, ${sb.centerLng.toFixed(4)}
+Search center: ${sb.centerLat.toFixed(4)}°N, ${Math.abs(sb.centerLng).toFixed(4)}°W
+Month: ${month}. Season: ${season}.
 
-LIVE CURRENT SENSOR READINGS:
-${currentPts}
+PRE-SCORED CANDIDATE GRID (each point has depth/SST/chlorophyll/current from real sensors):
+${candidateBlock}
 
 ${eddyContext}
-Satellite: ${satContext}
 
-Month: ${month}. Season: ${season}. Species target: ${spNames}.
-${selSp.map(s=>`${s.label}: depth ${s.depth}, SST ${s.sst[0]}–${s.sst[1]}°F. ${s.tip}`).join('\n')}
+SPECIES REQUIREMENTS:
+${selSp.map(s=>`• ${s.label}: SST ${s.sst[0]}–${s.sst[1]}°F, depth ${s.depth}, chl ${s.chl}. ${s.tip}`).join('\n')}
 
-RULES:
-1. Place hotspots at coordinates derived from the sensor readings above — interpolate between them
-2. Do NOT use any named reef, ledge, or inlet from memory — name spots by their oceanographic feature instead (e.g. "Current shear zone", "SST break at 78.4°F", "Upwelling eddy edge")
-3. lat must be between ${sb.south.toFixed(4)} and ${sb.north.toFixed(4)}
-4. lng must be between ${sb.west.toFixed(4)} and ${sb.east.toFixed(4)}
-5. Each spot must have a different lat/lng
+INSTRUCTIONS:
+- Pick 4 candidates from the list above (use their EXACT lat/lng)
+- For each hotspot explain WHY citing the specific values: depth in feet, SST in °F, chl in mg/m³, current speed/direction
+- Name each spot after its oceanographic feature (e.g. "78.4°F SST Break", "0.8kt NE Current Edge", "180ft Depth Transition")
+- Give a specific technique tuned to these exact conditions
 
-Respond ONLY with valid JSON:
-{"overall":"...","conditions_rating":"Excellent|Good|Fair|Poor","avg_current_kt":"${avgSpd}","dominant_flow":"${domDir}","hotspots":[{"name":"oceanographic feature name only","location":"bearing and distance from center point","lat":0.0000,"lng":0.0000,"why":"2-3 sentences citing specific values from the sensor data — e.g. current speed at this coordinate, SST value, proximity to eddy, gradient strength. Explain exactly what oceanic condition makes this a hotspot and why ${spNames} will be there.","species":["${spNames}"],"primary_species":"${spNames}","technique":"specific rigging and method for these exact conditions","confidence":"High|Medium|Low","depth_target":"..."}],"pro_tip":"one tactical tip based on today's specific data"}`;
-  }
-
-  // Update loading display
-  document.getElementById('aibody').innerHTML = `<div style="padding:14px">
-    <div class="ldstep" style="color:var(--bait)">✓ Currents live — ${currentGrid.length} pts</div>
-    <div class="ldb"><div class="ldf" style="width:100%;animation:none;background:var(--bait)"></div></div>
-    <div class="ldstep" style="color:var(--bait)">✓ Satellite data ready</div>
-    <div class="ldb"><div class="ldf" style="width:100%;animation:none;background:var(--bait)"></div></div>
-    <div class="ldstep"><div class="spin"></div>Claude identifying hotspots for ${spNames}...</div>
-    <div class="ldb"><div class="ldf"></div></div>
-  </div>`;
+Respond ONLY with valid JSON — no markdown, no preamble:
+{"overall":"2-3 sentences describing conditions using actual data values","conditions_rating":"Excellent|Good|Fair|Poor","avg_current_kt":"${avgSpd}","dominant_flow":"${domDir}","hotspots":[{"name":"feature-based name","location":"direction and approx distance from pin center","lat":0.0000,"lng":0.0000,"why":"2-3 sentences citing the EXACT depth, SST, chl, and current values from the candidate list above — explain the oceanographic mechanism","species":["${spNames}"],"primary_species":"primary species name","technique":"specific method and rigging for these exact conditions","confidence":"High|Medium|Low","depth_target":"depth range in feet"}],"pro_tip":"one actionable insight from today's data"}`;
 
   try {
-    const res = await fetch('/.netlify/functions/claude', {
-      method:'POST', headers:{'Content-Type':'application/json'},
-      body: JSON.stringify({ type:'analyze', prompt: userPrompt, system: systemPrompt })
-    });
+    let res, attempts = 0;
+    while (attempts < 3) {
+      res = await fetch('/.netlify/functions/claude', {
+        method:'POST', headers:{'Content-Type':'application/json'},
+        body: JSON.stringify({ type:'analyze', prompt: userPrompt, system: systemPrompt })
+      });
+      if (res.status !== 503) break;
+      attempts++;
+      document.getElementById('aibody').innerHTML += `<div style="padding:0 14px;font-family:'Space Mono';font-size:8px;color:var(--warm)">API busy — retry ${attempts}/3...</div>`;
+      await new Promise(r => setTimeout(r, 3000 * attempts));
+    }
     if (!res.ok) { const e = await res.json(); throw new Error(e.error || `HTTP ${res.status}`); }
+
     const data   = await res.json();
     const parsed = JSON.parse(data.content.map(i=>i.text||'').join('').replace(/```json|```/g,'').trim());
 
     const rawHs = parsed.hotspots || [];
-    console.log('Search bounds:', sb.south.toFixed(4), sb.north.toFixed(4), sb.west.toFixed(4), sb.east.toFixed(4));
-    console.log('Claude returned hotspots:', rawHs.map(h => `${h.name}: ${h.lat}, ${h.lng ?? h.lon}`));
-    // Normalise lon→lng (speciesPrompts uses 'lon', fallback uses 'lng')
+    console.log('Scored candidates:', candidates.slice(0,10).map(c=>`${c.lat.toFixed(3)},${c.lng.toFixed(3)} score:${c.score}`));
+    console.log('Claude selected:', rawHs.map(h=>`${h.name}: ${h.lat},${h.lng}`));
+
     rawHs.forEach(hs => { if (hs.lon !== undefined && hs.lng === undefined) hs.lng = hs.lon; });
-    // Always show all hotspots — the map will pan to them regardless
-    hotspots = rawHs.filter(hs => {
-      const lat = parseFloat(hs.lat), lng = parseFloat(hs.lng);
-      return !isNaN(lat) && !isNaN(lng);
-    });
+    hotspots = rawHs.filter(hs => !isNaN(parseFloat(hs.lat)) && !isNaN(parseFloat(hs.lng)));
     renderResults(parsed);
+
   } catch(e) {
-    document.getElementById('aibody').innerHTML = `<div class="aimt"><div class="aimt-ico">⚠️</div><div class="aimt-txt">Analysis failed:<br><small style="color:var(--muted)">${e.message}</small><br><br><button onclick="clearAnalysisPin()" style="padding:6px 14px;border-radius:5px;border:1px solid var(--teal);background:transparent;color:var(--teal);font-family:'Space Mono';font-size:9px;cursor:pointer">↩ Try Again</button></div></div>`;
+    const msg = e.message?.includes('503') ? 'Anthropic API is busy — wait 30s and retry.' : e.message;
+    document.getElementById('aibody').innerHTML = `<div class="aimt"><div class="aimt-ico">⚠️</div><div class="aimt-txt">${msg}<br><br><button onclick="runAIAnalysis()" style="padding:6px 14px;border-radius:5px;border:1px solid var(--teal);background:transparent;color:var(--teal);font-family:'Space Mono';font-size:9px;cursor:pointer;margin-right:6px">⟳ Retry</button><button onclick="clearAnalysisPin()" style="padding:6px 14px;border-radius:5px;border:1px solid var(--border);background:transparent;color:var(--muted);font-family:'Space Mono';font-size:9px;cursor:pointer">↩ Reset</button></div></div>`;
   }
 
   btn.disabled = false;
   btn.textContent = '🔄 RE-ANALYZE';
 }
-
 // ═══════════════════════════════════════════
 // PANEL TABS
 // ═══════════════════════════════════════════
