@@ -3,19 +3,12 @@ const crypto = require('crypto');
 // ═══════════════════════════════════════════════════════════════════
 // BlueWater Intel — Netlify Serverless Function (Hardened)
 // ═══════════════════════════════════════════════════════════════════
-// Changes from original:
-//  1. Auth tokens use HMAC-SHA256 instead of predictable string
-//  2. Added /analyze route so AI calls go through server (no client API key)
-//  3. Input validation on all endpoints
-//  4. In-memory rate limiting on auth endpoint (brute-force protection)
-//  5. Removed duplicate/dead code paths
-//  6. Consistent error handling
-// ═══════════════════════════════════════════════════════════════════
 
 const CORS = {
   'Content-Type': 'application/json',
-  'Access-Control-Allow-Origin': '*',
-  'Access-Control-Allow-Headers': 'Content-Type',
+  'Access-Control-Allow-Origin': 'https://bluewater-intel.netlify.app',
+  'Access-Control-Allow-Headers': 'Content-Type, x-bw-token',
+  'Access-Control-Allow-Methods': 'POST, OPTIONS',
 };
 
 // ── Helpers ──────────────────────────────────────────────────────
@@ -54,13 +47,11 @@ function isXMLError(buf) {
 
 /** Parse a numeric value from CMEMS plain-text response */
 function parseCMEMSValue(text) {
-  // Skip lines that look like error messages — only grab standalone numbers
   const lines = text.split('\n').filter(l => l.trim().length > 0);
   for (const line of lines) {
     const m = line.match(/^[\s]*(-?[0-9]+\.?[0-9]*(?:[eE][-+]?[0-9]+)?)[\s]*$/);
     if (m) return parseFloat(m[1]);
   }
-  // Fallback: look for "value = X" pattern
   const valMatch = text.match(/value\s*[=:]\s*(-?[0-9]+\.?[0-9]*(?:[eE][-+]?[0-9]+)?)/i);
   if (valMatch) return parseFloat(valMatch[1]);
   return null;
@@ -80,20 +71,67 @@ function validateBounds(payload) {
   };
 }
 
-// ── Simple in-memory rate limiter for auth ──────────────────────
-const authAttempts = new Map(); // ip -> { count, resetAt }
-const AUTH_LIMIT = 10;         // max attempts per window
-const AUTH_WINDOW = 60_000;    // 1 minute window
+// ── Rate limiting ────────────────────────────────────────────────
+// Auth endpoint: strict (brute-force protection)
+const authAttempts = new Map();
+const AUTH_LIMIT  = 10;
+const AUTH_WINDOW = 60_000;
 
-function checkAuthRate(ip) {
+// Global endpoint: per-IP across all routes
+const globalCalls = new Map();
+const GLOBAL_LIMIT  = 120;   // requests per window
+const GLOBAL_WINDOW = 60_000; // 1 minute
+
+// Analyze endpoint: tighter limit (costs money per call)
+const analyzeCalls = new Map();
+const ANALYZE_LIMIT  = 15;
+const ANALYZE_WINDOW = 60_000;
+
+function getIP(event) {
+  return (event.headers['x-forwarded-for'] || '').split(',')[0].trim()
+      || event.headers['client-ip']
+      || 'unknown';
+}
+
+function checkRate(map, ip, limit, window) {
   const now = Date.now();
-  const entry = authAttempts.get(ip);
+  const entry = map.get(ip);
   if (!entry || now > entry.resetAt) {
-    authAttempts.set(ip, { count: 1, resetAt: now + AUTH_WINDOW });
+    map.set(ip, { count: 1, resetAt: now + window });
     return true;
   }
   entry.count++;
-  if (entry.count > AUTH_LIMIT) return false;
+  return entry.count <= limit;
+}
+
+// ── Origin + secret guard ────────────────────────────────────────
+const ALLOWED_ORIGINS = [
+  'https://bluewater-intel.netlify.app',
+  'http://localhost:8888',
+  'http://localhost:3000',
+];
+
+// Known bad actors — send them a personal message
+const BLOCKED_NAMES = ['jeff', 'jeffrey'];
+
+function isBlockedUser(payload) {
+  const fields = [payload.name, payload.user, payload.username, payload.passcode]
+    .filter(Boolean)
+    .map(v => String(v).toLowerCase());
+  return fields.some(f => BLOCKED_NAMES.some(b => f.includes(b)));
+}
+
+function checkOriginAndSecret(event, payload) {
+  const origin  = (event.headers['origin'] || event.headers['referer'] || '').toLowerCase();
+  const secret  = event.headers['x-bw-token'] || payload?.secret || '';
+  const envSecret = process.env.BW_SECRET || '';
+
+  const validOrigin = ALLOWED_ORIGINS.some(o => origin.startsWith(o));
+
+  // If secret is configured, require it regardless of origin
+  if (envSecret && secret !== envSecret) return false;
+  // If no secret configured, fall back to origin check
+  if (!envSecret && !validOrigin) return false;
   return true;
 }
 
@@ -105,6 +143,13 @@ exports.handler = async (event) => {
   if (event.httpMethod === 'OPTIONS') return { statusCode: 200, headers: CORS, body: '' };
   if (event.httpMethod !== 'POST') return err(405, 'Method Not Allowed');
 
+  const ip = getIP(event);
+
+  // ── Global rate limit (all endpoints) ───────────────────────────
+  if (!checkRate(globalCalls, ip, GLOBAL_LIMIT, GLOBAL_WINDOW)) {
+    return err(429, 'Too many requests — slow down.');
+  }
+
   let payload;
   try {
     payload = JSON.parse(event.body);
@@ -115,14 +160,25 @@ exports.handler = async (event) => {
   const type = payload.type;
   if (!type || typeof type !== 'string') return err(400, 'Missing request type');
 
+  // ── Jeff check ──────────────────────────────────────────────────
+  if (isBlockedUser(payload)) {
+    return err(403, "Jeff — you fell right into the trap. I knew you couldn't help yourself... but checkmate! 🎣♟️");
+  }
+
+  // ── Origin / secret guard (skip for ping) ───────────────────────
+  if (type !== 'ping' && !checkOriginAndSecret(event, payload)) {
+    return err(403, 'Access denied.');
+  }
+
   try {
     // ── PING ──────────────────────────────────────────────────────
     if (type === 'ping') return ok({ ok: true });
 
     // ── AUTH — validate passcode, return HMAC token ──────────────
     if (type === 'auth') {
-      const ip = event.headers['x-forwarded-for'] || event.headers['client-ip'] || 'unknown';
-      if (!checkAuthRate(ip)) return err(429, 'Too many attempts — try again in 1 minute');
+      if (!checkRate(authAttempts, ip, AUTH_LIMIT, AUTH_WINDOW)) {
+        return err(429, 'Too many attempts — try again in 1 minute');
+      }
 
       const { passcode } = payload;
       const correct = process.env.VITE_APP_PASSCODE || process.env.APP_PASSCODE || '';
@@ -142,15 +198,18 @@ exports.handler = async (event) => {
       return ok({ ok: verifyToken(token, correct) });
     }
 
-    // ── ANALYZE — AI fishing analysis (server-side API key) ──────
-    // This is the NEW route: frontend sends data here instead of
-    // calling Anthropic directly with a client-side key.
+    // ── ANALYZE — AI fishing analysis ────────────────────────────
     if (type === 'analyze') {
+      if (!checkRate(analyzeCalls, ip, ANALYZE_LIMIT, ANALYZE_WINDOW)) {
+        return err(429, 'Analysis rate limit reached — wait a minute before retrying.');
+      }
+
       const apiKey = process.env.ANTHROPIC_API_KEY;
       if (!apiKey) return err(500, 'Anthropic API key not configured on server');
 
       const { prompt, system } = payload;
       if (!prompt || typeof prompt !== 'string') return err(400, 'Missing analysis prompt');
+      if (prompt.length > 16000) return err(400, 'Prompt too long');
 
       const response = await fetch('https://api.anthropic.com/v1/messages', {
         method: 'POST',
