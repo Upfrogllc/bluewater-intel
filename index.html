@@ -3025,6 +3025,10 @@ function detectFronts(){
 // ═══════════════════════════════════════════
 let activeCurSrc = 'openmeteo';
 
+// ── API security token — must match BW_SECRET in Netlify env vars ──
+const BW_TOKEN = '%%BW_SECRET%%'; // replace with your actual secret before deploying
+const BW_HEADERS = { 'Content-Type': 'application/json', 'x-bw-token': BW_TOKEN };
+
 const CUR_SOURCES = {
   openmeteo: {
     label: 'Open-Meteo / MeteoFrance',
@@ -3115,7 +3119,7 @@ async function fetchCurrents_CMEMS(pts, dataset) {
   try {
     const res = await fetch('/.netlify/functions/claude', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: BW_HEADERS,
       body: JSON.stringify({
         type: 'cmems_currents',
         dataset: dataset,
@@ -3692,7 +3696,7 @@ async function fetchOceanGrid(points) {
   try {
     const res = await fetch('/.netlify/functions/ocean-grid', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: BW_HEADERS,
       body: JSON.stringify({ points, date: selectedDate })
     });
     if (!res.ok) return null;
