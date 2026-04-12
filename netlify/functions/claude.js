@@ -257,10 +257,19 @@ exports.handler = async (event) => {
       const thresholds = species.map(id => THRESHOLDS[id]).filter(Boolean);
       if (!thresholds.length) return err(400, 'No valid species', event);
 
+      // Compute combined depth window across all selected species
+      const depthMin = Math.min(...thresholds.map(t => t.depth_min));
+      const depthMax = Math.max(...thresholds.map(t => t.depth_max === 99999 ? 99999 : t.depth_max));
+
       const DIRS = ['N','NNE','NE','ENE','E','ESE','SE','SSE','S','SSW','SW','WSW','W','WNW','NW','NNW'];
 
       const scored = currentGrid
-        .filter(pt => (pt.depth || 0) > 5)
+        .filter(pt => {
+          const d = pt.depth || 0;
+          // HARD filter: must be within depth range of at least one selected species
+          if (d < 5) return false;
+          return thresholds.some(t => d >= t.depth_min && d <= t.depth_max);
+        })
         .map(pt => {
           const sst = pt.sst_f ?? (pt.sst_c != null ? pt.sst_c * 9/5 + 32 : null);
           const chl = pt.chl ?? null;
@@ -295,6 +304,11 @@ exports.handler = async (event) => {
 
       const systemPrompt = `You are a marine biologist and offshore fishing expert. You receive pre-scored ocean grid data with real measured sensor values and identify the best fishing hotspots. Cite specific data values in your reasoning. Respond ONLY with valid JSON.`;
 
+      // Build hard depth constraint string for the prompt
+      const depthConstraintStr = thresholds.map(t =>
+        `${t.label}: ONLY recommend spots between ${t.depth_min}ft and ${t.depth_max === 99999 ? '∞' : t.depth_max + 'ft'} depth. NEVER recommend spots outside this range.`
+      ).join('\n');
+
       const userPrompt = `Select the 4 best fishing hotspots for ${spNames} from these pre-scored candidates.
 
 Search center: ${parseFloat(lat).toFixed(4)}°N, ${Math.abs(parseFloat(lng)).toFixed(4)}°W — ${radiusMi || 50}mi radius. Month: ${month}.
@@ -302,12 +316,16 @@ Search center: ${parseFloat(lat).toFixed(4)}°N, ${Math.abs(parseFloat(lng)).toF
 SCORED GRID (depth=NOAA charts, SST=MUR L4 satellite, chl=VIIRS, currents=Open-Meteo):
 ${candidateBlock}
 
-SPECIES: ${thresholds.map(t => `${t.label}: SST ${t.sst_min}–${t.sst_max}°F, depth ${t.depth_min}–${t.depth_max === 99999 ? '∞' : t.depth_max}ft. ${t.tip}`).join(' | ')}
+HARD DEPTH REQUIREMENTS — THESE ARE ABSOLUTE, NON-NEGOTIABLE:
+${depthConstraintStr}
+ANY candidate with depth outside the required range MUST be excluded. Do not recommend it under any circumstances.
 
-Pick 4 candidates using their EXACT lat/lng. Name each after its oceanographic feature. Cite actual data values in the why field.
+SPECIES NOTES: ${thresholds.map(t => `${t.label}: ${t.tip}`).join(' | ')}
+
+Pick 4 candidates using their EXACT lat/lng. Name each after its oceanographic feature (e.g. "78°F SST Break", "1.2kt NE Current Edge", "120ft Reef Ledge"). Cite actual depth/SST/chl/current values in the why field.
 
 Respond ONLY with JSON:
-{"overall":"...","conditions_rating":"Excellent|Good|Fair|Poor","avg_current_kt":"${avgSpd}","dominant_flow":"${domDir}","hotspots":[{"name":"feature name","location":"bearing and distance from center","lat":0.0000,"lng":0.0000,"why":"cite depth/SST/chl/current values","species":["${spNames}"],"primary_species":"primary species","technique":"specific method","confidence":"High|Medium|Low","depth_target":"depth range"}],"pro_tip":"actionable insight from today's data"}`;
+{"overall":"...","conditions_rating":"Excellent|Good|Fair|Poor","avg_current_kt":"${avgSpd}","dominant_flow":"${domDir}","hotspots":[{"name":"feature name","location":"bearing and distance from center","lat":0.0000,"lng":0.0000,"why":"cite depth/SST/chl/current values","species":["${spNames}"],"primary_species":"primary species","technique":"specific method","confidence":"High|Medium|Low","depth_target":"depth range in feet"}],"pro_tip":"actionable insight from today's data"}`;
 
       // ── Call Claude with retry ────────────────────────────────
       let aiResponse, attempts = 0;
@@ -340,6 +358,25 @@ Respond ONLY with JSON:
       }
 
       (parsed.hotspots || []).forEach(hs => { if (hs.lon !== undefined && hs.lng === undefined) hs.lng = hs.lon; });
+
+      // Hard post-filter: remove any hotspot Claude picked that's outside depth range
+      // Match hotspot back to its scored grid point and verify depth
+      if (parsed.hotspots) {
+        parsed.hotspots = parsed.hotspots.filter(hs => {
+          // Find the closest scored candidate to this hotspot
+          const hsLat = parseFloat(hs.lat), hsLng = parseFloat(hs.lng);
+          if (isNaN(hsLat) || isNaN(hsLng)) return false;
+          let closest = null, closestDist = Infinity;
+          for (const pt of scored) {
+            const d = Math.abs(pt.lat - hsLat) + Math.abs(pt.lng - hsLng);
+            if (d < closestDist) { closestDist = d; closest = pt; }
+          }
+          if (!closest) return false;
+          const depth = closest.depth || 0;
+          // Must be within depth range of at least one selected species
+          return thresholds.some(t => depth >= t.depth_min && depth <= t.depth_max);
+        });
+      }
 
       return ok(parsed, event);
     }
