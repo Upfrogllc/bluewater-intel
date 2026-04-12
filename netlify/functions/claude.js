@@ -4,6 +4,12 @@ const crypto = require('crypto');
 // BlueWater Intel — Netlify Serverless Function (Hardened)
 // ═══════════════════════════════════════════════════════════════════
 
+const ALLOWED_ORIGINS = [
+  'https://bluewater-intel.netlify.app',
+  'http://localhost:8888',
+  'http://localhost:3000',
+];
+
 function getCORSHeaders(event) {
   const origin = event.headers['origin'] || '';
   const allowed = ALLOWED_ORIGINS.some(o => origin.startsWith(o))
@@ -111,12 +117,6 @@ function checkRate(map, ip, limit, window) {
 }
 
 // ── Origin + secret guard ────────────────────────────────────────
-const ALLOWED_ORIGINS = [
-  'https://bluewater-intel.netlify.app',
-  'http://localhost:8888',
-  'http://localhost:3000',
-];
-
 // Known bad actors — send them a personal message
 const BLOCKED_NAMES = ['jeff', 'jeffrey'];
 
@@ -328,8 +328,17 @@ Respond ONLY with JSON:
       }
 
       const aiData  = await aiResponse.json();
-      const text    = aiData.content.map(i => i.text || '').join('').replace(/```json|```/g, '').trim();
-      const parsed  = JSON.parse(text);
+      const rawText = aiData.content.map(i => i.text || '').join('').replace(/```json|```/g, '').trim();
+
+      let parsed;
+      try {
+        parsed = JSON.parse(rawText);
+      } catch(parseErr) {
+        // Claude returned non-JSON — extract what we can or return error
+        console.error('Claude JSON parse failed:', rawText.slice(0, 200));
+        return err(500, 'AI returned malformed response — please retry', event);
+      }
+
       (parsed.hotspots || []).forEach(hs => { if (hs.lon !== undefined && hs.lng === undefined) hs.lng = hs.lon; });
 
       return ok(parsed, event);
