@@ -1,17 +1,5 @@
 const crypto = require('crypto');
 
-// Polyfill fetch for Node < 18
-if (typeof fetch === 'undefined') {
-  try { global.fetch = require('node-fetch'); } catch(e) {
-    // node-fetch not available — fetch calls will fail gracefully
-  }
-}
-
-// Global error boundary — catch anything that escapes the handler
-process.on('unhandledRejection', (reason) => {
-  console.error('[BWI] Unhandled rejection:', reason);
-});
-
 // ═══════════════════════════════════════════════════════════════════
 // BlueWater Intel — Netlify Serverless Function (Hardened)
 // ═══════════════════════════════════════════════════════════════════
@@ -178,7 +166,7 @@ exports.handler = async (event) => {
 
   // ── Jeff check ──────────────────────────────────────────────────
   if (isBlockedUser(payload)) {
-    return err(403, "Jeff — you fell right into the trap. I knew you couldn't help yourself... but checkmate! 🎣♟️");
+    return err(403, "Jeff — you fell right into the trap. I knew you couldn't help yourself... but checkmate! 🎣♟️", event);
   }
 
 // ── Origin / secret guard (skip for ping) ───────────────────────
@@ -186,7 +174,7 @@ exports.handler = async (event) => {
     const origin = event.headers['origin'] || event.headers['referer'] || 'unknown';
     // Looks like someone running a copy of the frontend from elsewhere
     console.warn(`[BLOCKED] Unauthorized access attempt from origin: ${origin} | IP: ${ip} | type: ${type}`);
-    return err(403, "Nice try — but this API is locked to the real BlueWater Intel. If you're running a copy of the frontend, it won't work without the server secret. 🔒");
+    return err(403, "Nice try — but this API is locked to the real BlueWater Intel. If you're running a copy of the frontend, it won't work without the server secret. 🔒", event);
   }
 
   try {
@@ -433,7 +421,7 @@ Respond ONLY with JSON:
           const res = await fetch(url, { headers: { 'User-Agent': 'BlueWaterIntel/1.0' } });
           if (!res.ok) continue;
           const buf = await res.arrayBuffer();
-          if (isXMLError(buf)) return err(400, `Layer not found: ${layer}`);
+          if (isXMLError(buf)) return err(400, `Layer not found: ${layer}`, event);
           if (!isValidPNG(buf)) continue;
           return ok({
             image: Buffer.from(buf).toString('base64'),
@@ -443,7 +431,7 @@ Respond ONLY with JSON:
           });
         } catch (e) { continue; }
       }
-      return err(404, `No satellite pass for ${date} — cloud cover or not yet processed. Try an earlier date.`);
+      return err(404, `No satellite pass for ${date} — cloud cover or not yet processed. Try an earlier date.`, event);
     }
 
     // ── CoastWatch ERDDAP WMS — 300m Sentinel-3 OLCI ────────────
@@ -491,7 +479,7 @@ Respond ONLY with JSON:
           });
         } catch (e) { continue; }
       }
-      return err(404, `No CoastWatch data for ${date} — cloud cover or not yet processed`);
+      return err(404, `No CoastWatch data for ${date} — cloud cover or not yet processed`, event);
     }
 
     // ── CMEMS Ocean Currents ─────────────────────────────────────
