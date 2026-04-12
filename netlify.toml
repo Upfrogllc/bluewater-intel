@@ -4,3 +4,12 @@
 
 [functions]
   node_bundler = "esbuild"
+
+[functions."claude"]
+  node_bundler = "esbuild"
+
+[context.production.environment]
+  NODE_VERSION = "18"
+
+[context.deploy-preview.environment]
+  NODE_VERSION = "18"
