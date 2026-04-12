@@ -1121,13 +1121,15 @@ function initLeafletMap() {
   map.on('click', function(e) {
     const lat = e.latlng.lat, lng = e.latlng.lng;
     if (analysisFlowActive) {
-      // AI analysis flow — drop the search pin
       dropAnalysisPin(lat, lng);
     } else if (mapMode === 'measure') {
       handleMeasureClick(lat, lng);
-    } else {
-      // Default — show spot info on every click
+    } else if (mapMode === 'info') {
+      // Only show spot popup when info tool is active
       openSpotPopup(lat, lng, e.containerPoint.x, e.containerPoint.y);
+    } else {
+      // Any other click closes the popup
+      closeSpotPopup();
     }
   });
 
