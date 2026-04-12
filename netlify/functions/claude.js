@@ -1,5 +1,17 @@
 const crypto = require('crypto');
 
+// Polyfill fetch for Node < 18
+if (typeof fetch === 'undefined') {
+  try { global.fetch = require('node-fetch'); } catch(e) {
+    // node-fetch not available — fetch calls will fail gracefully
+  }
+}
+
+// Global error boundary — catch anything that escapes the handler
+process.on('unhandledRejection', (reason) => {
+  console.error('[BWI] Unhandled rejection:', reason);
+});
+
 // ═══════════════════════════════════════════════════════════════════
 // BlueWater Intel — Netlify Serverless Function (Hardened)
 // ═══════════════════════════════════════════════════════════════════
@@ -545,10 +557,10 @@ Respond ONLY with JSON:
     }
 
     // ── Unknown type ─────────────────────────────────────────────
-    return err(400, `Unknown request type: ${type}`);
+    return err(400, `Unknown request type: ${type}`, event);
 
   } catch (e) {
-    console.error('Handler error:', e);
-    return err(500, e.message || 'Internal server error');
+    console.error('[BWI] Handler error:', e.stack || e.message || e);
+    return err(500, `Server error: ${e.message || 'unknown'}`, event);
   }
 };
