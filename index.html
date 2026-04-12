@@ -999,7 +999,7 @@ input[type=range].rng.sst-rng::-moz-range-thumb{background:var(--hot);}
   async function verifyToken(token) {
     try {
       const res = await fetch('/.netlify/functions/claude', {
-        method: 'POST', headers: {'Content-Type':'application/json'},
+        method: 'POST', headers: BW_HEADERS,
         body: JSON.stringify({ type: 'verify', token })
       });
       const data = await res.json();
@@ -1020,7 +1020,7 @@ input[type=range].rng.sst-rng::-moz-range-thumb{background:var(--hot);}
 
     try {
       const res = await fetch('/.netlify/functions/claude', {
-        method: 'POST', headers: {'Content-Type':'application/json'},
+        method: 'POST', headers: BW_HEADERS,
         body: JSON.stringify({ type: 'auth', passcode: pc })
       });
       const data = await res.json();
@@ -2171,7 +2171,7 @@ async function loadSatLayer(layerKey){
     satCache[layerKey].status='loading';
     try{
       const res = await fetch('/.netlify/functions/claude',{
-        method:'POST', headers:{'Content-Type':'application/json'},
+        method:'POST', headers: BW_HEADERS,
         body: JSON.stringify({
           type:'coastwatch',
           dataset: src.dataset,
