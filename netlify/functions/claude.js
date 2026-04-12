@@ -266,8 +266,9 @@ exports.handler = async (event) => {
       const scored = currentGrid
         .filter(pt => {
           const d = pt.depth || 0;
-          // HARD filter: must be within depth range of at least one selected species
-          if (d < 5) return false;
+          // If depth is unknown (0/null), allow it through — server can't verify
+          if (d < 5) return true;
+          // If depth IS known, hard-filter: must be within range of at least one species
           return thresholds.some(t => d >= t.depth_min && d <= t.depth_max);
         })
         .map(pt => {
@@ -284,7 +285,7 @@ exports.handler = async (event) => {
         .sort((a, b) => b.score - a.score);
 
       if (!scored.length) {
-        return err(422, 'No grid points match depth/SST requirements for selected species. Move pin to better habitat.', event);
+        return err(422, 'No grid points matched the conditions for the selected species in this area. Try moving the pin or expanding the radius.', event);
       }
 
       // ── Build prompt (never leaves server) ────────────────────
