@@ -1527,13 +1527,8 @@ function openSpotPopup(lat, lng, canvasX, canvasY) {
   </div>`;
   html += `<div class="sp-section">OCEAN DATA</div>`;
 
-  // Show chart depth immediately, then update with NOAA depth
-  const chartDepth = depthAt(lat, lng);
-  if (chartDepth && chartDepth > 0) {
-    html += `<div class="sp-row" id="sp-depth-row"><span class="sp-lbl">DEPTH</span><span class="sp-val teal" id="sp-depth-val">${Math.round(chartDepth)} ft · ${Math.round(chartDepth*0.3048)} m · ${Math.round(chartDepth/6)} fm <span style="font-size:8px;opacity:.6">(chart)</span></span></div>`;
-  } else {
-    html += `<div class="sp-row" id="sp-depth-row"><span class="sp-lbl">DEPTH</span><span class="sp-val teal" id="sp-depth-val">Fetching...</span></div>`;
-  }
+  // Show depth row as loading — NOAA fetch will update it
+  html += `<div class="sp-row" id="sp-depth-row"><span class="sp-lbl">DEPTH</span><span class="sp-val teal" id="sp-depth-val"><span style="color:var(--muted);font-size:9px">fetching...</span></span></div>`;
 
   if (cur && currentGrid.length > 0 && cur.speed_kt > 0.01) {
     const dirName = DIRS[Math.round(cur.dir_deg/22.5)%16];
@@ -1561,12 +1556,16 @@ function openSpotPopup(lat, lng, canvasX, canvasY) {
   fetchNOAADepth(lat, lng).then(noaaResult => {
     const el = document.getElementById('sp-depth-val');
     if (!el) return;
-    const depth_ft = noaaResult ? noaaResult.depth_ft : chartDepth;
-    if (depth_ft && depth_ft > 0) {
-      const src = noaaResult ? noaaResult.source : 'chart';
-      el.innerHTML = `${Math.round(depth_ft)} ft · ${Math.round(depth_ft/3.281)} m · ${Math.round(depth_ft/6)} fm <span style="font-size:8px;opacity:.6">(${src})</span>`;
-    } else if (depth_ft !== null && depth_ft <= 0) {
-      el.textContent = 'Land / shoal';
+    if (noaaResult && noaaResult.depth_ft > 0) {
+      el.innerHTML = `${Math.round(noaaResult.depth_ft)} ft · ${Math.round(noaaResult.depth_ft/3.281)} m · ${Math.round(noaaResult.depth_ft/6)} fm <span style="font-size:8px;opacity:.6">(${noaaResult.source})</span>`;
+    } else {
+      // NOAA failed — fall back to chart interpolation with label
+      const chartDepth = depthAt(lat, lng);
+      if (chartDepth && chartDepth > 0) {
+        el.innerHTML = `~${Math.round(chartDepth)} ft · ${Math.round(chartDepth/3.281)} m · ${Math.round(chartDepth/6)} fm <span style="font-size:8px;opacity:.6">(chart est.)</span>`;
+      } else {
+        el.innerHTML = `<span style="color:var(--muted)">No data</span>`;
+      }
     }
   });
 }
