@@ -1558,14 +1558,14 @@ function openSpotPopup(lat, lng, canvasX, canvasY) {
   }, 0);
 
   // Fetch accurate NOAA depth in background and update
-  fetchNOAADepth(lat, lng).then(noaaDepth => {
+  fetchNOAADepth(lat, lng).then(noaaResult => {
     const el = document.getElementById('sp-depth-val');
     if (!el) return;
-    const depth = noaaDepth !== null ? noaaDepth : chartDepth;
-    if (depth && depth > 0) {
-      const src = noaaDepth !== null ? 'NOAA ETOPO' : 'chart';
-      el.innerHTML = `${Math.round(depth)} ft · ${Math.round(depth*0.3048)} m · ${Math.round(depth/6)} fm <span style="font-size:8px;opacity:.6">(${src})</span>`;
-    } else if (depth !== null && depth <= 0) {
+    const depth_ft = noaaResult ? noaaResult.depth_ft : chartDepth;
+    if (depth_ft && depth_ft > 0) {
+      const src = noaaResult ? noaaResult.source : 'chart';
+      el.innerHTML = `${Math.round(depth_ft)} ft · ${Math.round(depth_ft/3.281)} m · ${Math.round(depth_ft/6)} fm <span style="font-size:8px;opacity:.6">(${src})</span>`;
+    } else if (depth_ft !== null && depth_ft <= 0) {
       el.textContent = 'Land / shoal';
     }
   });
@@ -3667,25 +3667,24 @@ function dropAnalysisPin(lat, lng) {
   const depthInfo = document.getElementById('pin-depth-info');
   depthInfo.innerHTML = `<span style="color:var(--muted)">Fetching depth...</span>`;
 
-  fetchNOAADepth(lat, lng).then(noaaDepth => {
-    const displayDepth = noaaDepth !== null ? noaaDepth : depthAt(lat, lng);
+  fetchNOAADepth(lat, lng).then(noaaResult => {
+    const displayDepth = noaaResult ? noaaResult.depth_ft : depthAt(lat, lng);
     const selSp = SPECIES.filter(s => selectedSpecies.has(s.id));
 
     if (displayDepth && displayDepth > 5) {
-      // Check species depth thresholds (sent to server but give user a hint)
       const DEPTH_HINTS = {
         blue_marlin:[800,99999], white_marlin:[400,99999], sailfish:[80,600],
         swordfish:[1200,99999], mahi:[80,800], dolphin:[80,800], wahoo:[200,1200],
         yellowfin:[400,99999], blackfin:[150,600], kingfish:[40,200],
         cobia:[40,300], tripletail:[20,150]
       };
-      const allTooDeep  = selSp.length > 0 && selSp.every(s => { const t = DEPTH_HINTS[s.id]; return t && displayDepth > t[1]; });
+      const allTooDeep    = selSp.length > 0 && selSp.every(s => { const t = DEPTH_HINTS[s.id]; return t && displayDepth > t[1]; });
       const allTooShallow = selSp.length > 0 && selSp.every(s => { const t = DEPTH_HINTS[s.id]; return t && displayDepth < t[0]; });
       const depthColor = (allTooDeep || allTooShallow) ? '#ff4e2a' : '#5dffaa';
       const warn = allTooDeep ? ' ⚠️ Too deep — move pin closer to shore' :
                    allTooShallow ? ' ⚠️ Too shallow — move pin offshore' : ' ✓ Good depth range';
-      const src = noaaDepth !== null ? ' (NOAA)' : ' (chart)';
-      depthInfo.innerHTML = `<span style="color:${depthColor}">~${Math.round(displayDepth)}ft · ${Math.round(displayDepth*0.3048)}m · ${Math.round(displayDepth/6)}fm${src}${warn}</span>`;
+      const src = noaaResult ? ` (${noaaResult.source})` : ' (chart)';
+      depthInfo.innerHTML = `<span style="color:${depthColor}">~${Math.round(displayDepth)}ft · ${Math.round(displayDepth/3.281)}m · ${Math.round(displayDepth/6)}fm${src}${warn}</span>`;
     } else {
       depthInfo.innerHTML = `<span style="color:var(--muted)">No depth data for this location</span>`;
     }
@@ -3773,37 +3772,26 @@ async function confirmPinAndFetch() {
   await runAIAnalysis(currentGrid);
 }
 
-// ── Fetch accurate depth from NOAA's point depth API ─────────────
+// ── Fetch accurate depth from our Netlify depth function ──────────
+// Queries NOAA multibeam, BAG, CRM, GEBCO in order of accuracy
 async function fetchNOAADepth(lat, lng) {
   try {
-    // NOAA Digital Coast / CoastWatch point depth query
-    // Uses ETOPO1 global relief model — 1 arc-minute resolution (~1.8km)
-    // Better than our sparse bathy grid for accuracy
-    const url = `https://api.tidesandcurrents.noaa.gov/mdapi/prod/webapi/stations.json?type=waterlevels&units=english&lat=${lat.toFixed(4)}&lon=${lng.toFixed(4)}&radius=50`;
-
-    // Fallback: use GEBCO/NOAA ERDDAP grid depth service
-    const erddapUrl = `https://coastwatch.pfeg.noaa.gov/erddap/griddap/etopo180.json` +
-      `?altitude[(${lat.toFixed(4)}):1:(${lat.toFixed(4)})][(${lng.toFixed(4)}):1:(${lng.toFixed(4)})]`;
-
     const res = await Promise.race([
-      fetch(erddapUrl),
-      new Promise((_, rej) => setTimeout(() => rej(new Error('timeout')), 5000))
+      fetch('/.netlify/functions/depth', {
+        method: 'POST',
+        headers: BW_HEADERS,
+        body: JSON.stringify({ lat, lng })
+      }),
+      new Promise((_, rej) => setTimeout(() => rej(new Error('timeout')), 8000))
     ]);
-
     if (!res.ok) return null;
     const data = await res.json();
-
-    // ETOPO returns elevation — negative = below sea level (depth)
-    if (data?.table?.rows?.length > 0) {
-      const elevation = data.table.rows[0][2]; // [time, lat, lng, altitude]
-      if (elevation !== null && elevation < 0) {
-        // Convert meters elevation to feet depth (negative elevation = depth)
-        return Math.abs(elevation) * 3.28084;
-      }
+    if (data.depth_ft && data.depth_ft > 0) {
+      return { depth_ft: data.depth_ft, source: data.source, accuracy: data.accuracy };
     }
     return null;
   } catch(e) {
-    return null; // silently fall back to bathy grid
+    return null;
   }
 }
 async function fetchOceanGrid(points) {
