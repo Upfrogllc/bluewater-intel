@@ -1120,12 +1120,14 @@ function initLeafletMap() {
   // Map click handler
   map.on('click', function(e) {
     const lat = e.latlng.lat, lng = e.latlng.lng;
-    if (mapMode === 'info') {
-      openSpotPopup(lat, lng, e.containerPoint.x, e.containerPoint.y);
+    if (analysisFlowActive) {
+      // AI analysis flow — drop the search pin
+      dropAnalysisPin(lat, lng);
     } else if (mapMode === 'measure') {
       handleMeasureClick(lat, lng);
-    } else if (analysisFlowActive) {
-      dropAnalysisPin(lat, lng);
+    } else {
+      // Default — always show spot info on click
+      openSpotPopup(lat, lng, e.containerPoint.x, e.containerPoint.y);
     }
   });
 
@@ -3170,8 +3172,10 @@ function buildViewportGrid(spacing) {
       pts.push([parseFloat(la.toFixed(4)), parseFloat(ln.toFixed(4))]);
     }
   }
-  if (pts.length > 400) {
-    const step = Math.ceil(pts.length / 400);
+  // Hard cap at 30 — viewport grid is only for the current layer display arrows.
+  // AI analysis always uses buildPinGrid which is tightly bounded.
+  if (pts.length > 30) {
+    const step = Math.ceil(pts.length / 30);
     return pts.filter((_, i) => i % step === 0);
   }
   return pts;
