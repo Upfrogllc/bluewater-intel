@@ -3785,7 +3785,7 @@ async function fetchNOAADepth(lat, lng) {
       }),
       new Promise((_, rej) => setTimeout(() => rej(new Error('timeout')), 8000))
     ]);
-    if (!res.ok) return null;
+    if (!res.ok) return null; // 404, 500 etc — fall back silently
     const data = await res.json();
     if (data.depth_ft && data.depth_ft > 0) {
       return { depth_ft: data.depth_ft, source: data.source, accuracy: data.accuracy };
