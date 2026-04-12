@@ -4,20 +4,26 @@ const crypto = require('crypto');
 // BlueWater Intel — Netlify Serverless Function (Hardened)
 // ═══════════════════════════════════════════════════════════════════
 
-const CORS = {
-  'Content-Type': 'application/json',
-  'Access-Control-Allow-Origin': 'https://bluewater-intel.netlify.app',
-  'Access-Control-Allow-Headers': 'Content-Type, x-bw-token',
-  'Access-Control-Allow-Methods': 'POST, OPTIONS',
-};
+function getCORSHeaders(event) {
+  const origin = event.headers['origin'] || '';
+  const allowed = ALLOWED_ORIGINS.some(o => origin.startsWith(o))
+    || origin.includes('netlify.app') // covers deploy previews + password-protected
+    || origin === '';                 // server-to-server / curl with no origin
+  return {
+    'Content-Type': 'application/json',
+    'Access-Control-Allow-Origin': allowed ? origin || '*' : 'https://bluewater-intel.netlify.app',
+    'Access-Control-Allow-Headers': 'Content-Type, x-bw-token',
+    'Access-Control-Allow-Methods': 'POST, OPTIONS',
+  };
+}
 
 // ── Helpers ──────────────────────────────────────────────────────
 
-function ok(body) {
-  return { statusCode: 200, headers: CORS, body: JSON.stringify(body) };
+function ok(body, event) {
+  return { statusCode: 200, headers: getCORSHeaders(event), body: JSON.stringify(body) };
 }
-function err(status, message) {
-  return { statusCode: status, headers: CORS, body: JSON.stringify({ error: message }) };
+function err(status, message, event) {
+  return { statusCode: status, headers: getCORSHeaders(event || {}), body: JSON.stringify({ error: message }) };
 }
 
 /** HMAC-SHA256 token — deterministic per day + secret */
@@ -122,17 +128,15 @@ function isBlockedUser(payload) {
 }
 
 function checkOriginAndSecret(event, payload) {
-  const origin  = (event.headers['origin'] || event.headers['referer'] || '').toLowerCase();
-  const secret  = event.headers['x-bw-token'] || payload?.secret || '';
+  const origin    = (event.headers['origin'] || event.headers['referer'] || '').toLowerCase();
+  const secret    = event.headers['x-bw-token'] || payload?.secret || '';
   const envSecret = process.env.BW_SECRET || '';
 
-  const validOrigin = ALLOWED_ORIGINS.some(o => origin.startsWith(o));
+  // If BW_SECRET is configured in env, require it — ignores origin
+  if (envSecret) return secret === envSecret;
 
-  // If secret is configured, require it regardless of origin
-  if (envSecret && secret !== envSecret) return false;
-  // If no secret configured, fall back to origin check
-  if (!envSecret && !validOrigin) return false;
-  return true;
+  // No secret configured — fall back to origin check only
+  return ALLOWED_ORIGINS.some(o => origin.startsWith(o));
 }
 
 // ═══════════════════════════════════════════════════════════════════
@@ -140,106 +144,202 @@ function checkOriginAndSecret(event, payload) {
 // ═══════════════════════════════════════════════════════════════════
 
 exports.handler = async (event) => {
-  if (event.httpMethod === 'OPTIONS') return { statusCode: 200, headers: CORS, body: '' };
-  if (event.httpMethod !== 'POST') return err(405, 'Method Not Allowed');
+  if (event.httpMethod === 'OPTIONS') return { statusCode: 200, headers: getCORSHeaders(event), body: '' };
+  if (event.httpMethod !== 'POST') return err(405, 'Method Not Allowed', event);
 
   const ip = getIP(event);
 
   // ── Global rate limit (all endpoints) ───────────────────────────
   if (!checkRate(globalCalls, ip, GLOBAL_LIMIT, GLOBAL_WINDOW)) {
-    return err(429, 'Too many requests — slow down.');
+    return err(429, 'Too many requests — slow down.', event);
   }
 
   let payload;
   try {
     payload = JSON.parse(event.body);
   } catch (e) {
-    return err(400, 'Invalid JSON body');
+    return err(400, 'Invalid JSON body', event);
   }
 
   const type = payload.type;
-  if (!type || typeof type !== 'string') return err(400, 'Missing request type');
+  if (!type || typeof type !== 'string') return err(400, 'Missing request type', event);
 
   // ── Jeff check ──────────────────────────────────────────────────
   if (isBlockedUser(payload)) {
     return err(403, "Jeff — you fell right into the trap. I knew you couldn't help yourself... but checkmate! 🎣♟️");
   }
 
-  // ── Origin / secret guard (skip for ping) ───────────────────────
+// ── Origin / secret guard (skip for ping) ───────────────────────
   if (type !== 'ping' && !checkOriginAndSecret(event, payload)) {
-    return err(403, 'Access denied.');
+    const origin = event.headers['origin'] || event.headers['referer'] || 'unknown';
+    // Looks like someone running a copy of the frontend from elsewhere
+    console.warn(`[BLOCKED] Unauthorized access attempt from origin: ${origin} | IP: ${ip} | type: ${type}`);
+    return err(403, "Nice try — but this API is locked to the real BlueWater Intel. If you're running a copy of the frontend, it won't work without the server secret. 🔒");
   }
 
   try {
     // ── PING ──────────────────────────────────────────────────────
-    if (type === 'ping') return ok({ ok: true });
+    if (type === 'ping') return ok({ ok: true }, event);
 
     // ── AUTH — validate passcode, return HMAC token ──────────────
     if (type === 'auth') {
       if (!checkRate(authAttempts, ip, AUTH_LIMIT, AUTH_WINDOW)) {
-        return err(429, 'Too many attempts — try again in 1 minute');
+        return err(429, 'Too many attempts — try again in 1 minute', event);
       }
 
       const { passcode } = payload;
       const correct = process.env.VITE_APP_PASSCODE || process.env.APP_PASSCODE || '';
-      if (!correct) return err(500, 'Passcode not configured');
-      if (typeof passcode !== 'string' || !passcode.trim()) return err(400, 'Passcode required');
+      if (!correct) return err(500, 'Passcode not configured', event);
+      if (typeof passcode !== 'string' || !passcode.trim()) return err(400, 'Passcode required', event);
 
       if (passcode === correct) {
-        return ok({ ok: true, token: makeToken(correct) });
+        return ok({ ok: true, token: makeToken(correct) }, event);
       }
-      return err(401, 'Wrong passcode');
+      return err(401, 'Wrong passcode', event);
     }
 
     // ── VERIFY — check stored session token ──────────────────────
     if (type === 'verify') {
       const { token } = payload;
       const correct = process.env.VITE_APP_PASSCODE || process.env.APP_PASSCODE || '';
-      return ok({ ok: verifyToken(token, correct) });
+      return ok({ ok: verifyToken(token, correct) }, event);
     }
 
-    // ── ANALYZE — AI fishing analysis ────────────────────────────
+    // ── ANALYZE — full server-side scoring + AI ──────────────────
     if (type === 'analyze') {
       if (!checkRate(analyzeCalls, ip, ANALYZE_LIMIT, ANALYZE_WINDOW)) {
-        return err(429, 'Analysis rate limit reached — wait a minute before retrying.');
+        return err(429, 'Analysis rate limit reached — wait a minute.', event);
       }
 
       const apiKey = process.env.ANTHROPIC_API_KEY;
-      if (!apiKey) return err(500, 'Anthropic API key not configured on server');
+      if (!apiKey) return err(500, 'API key not configured', event);
 
-      const { prompt, system } = payload;
-      if (!prompt || typeof prompt !== 'string') return err(400, 'Missing analysis prompt');
-      if (prompt.length > 16000) return err(400, 'Prompt too long');
+      const { species, currentGrid, lat, lng, radiusMi } = payload;
+      if (!species?.length)     return err(400, 'No species selected', event);
+      if (!currentGrid?.length) return err(400, 'No current data', event);
+      if (!lat || !lng)         return err(400, 'No pin location', event);
 
-      const response = await fetch('https://api.anthropic.com/v1/messages', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'x-api-key': apiKey,
-          'anthropic-version': '2023-06-01',
-        },
-        body: JSON.stringify({
-          model: 'claude-sonnet-4-20250514',
-          max_tokens: 1500,
-          system: system || 'Expert offshore fishing guide for Treasure Coast Florida. Respond only valid JSON.',
-          messages: [{ role: 'user', content: prompt }],
-        }),
-      });
+      // ── Species thresholds — server-side only, never sent to client ──
+      const THRESHOLDS = {
+        blue_marlin:  { label:'Blue Marlin',    sst_min:76, sst_max:86, depth_min:800,  depth_max:99999, chl_min:0.01, chl_max:0.30, tip:'Warm core eddies, deep blue water, Gulf Stream edge.' },
+        white_marlin: { label:'White Marlin',   sst_min:72, sst_max:82, depth_min:400,  depth_max:99999, chl_min:0.05, chl_max:0.50, tip:'Canyon edges and 100-fathom curve. Current edges and weed lines.' },
+        sailfish:     { label:'Sailfish',        sst_min:74, sst_max:84, depth_min:80,   depth_max:600,   chl_min:0.10, chl_max:0.80, tip:'Shallow thermocline, nearshore current edges, bait concentrations.' },
+        swordfish:    { label:'Swordfish',       sst_min:65, sst_max:78, depth_min:1200, depth_max:99999, chl_min:0.05, chl_max:0.50, tip:'Deep water, night bite near surface. Cold upwelling edges.' },
+        mahi:         { label:'Mahi-Mahi',       sst_min:75, sst_max:85, depth_min:80,   depth_max:800,   chl_min:0.15, chl_max:2.00, tip:'Weed lines, debris, floating objects. High chlorophyll edges.' },
+        dolphin:      { label:'Mahi-Mahi',       sst_min:75, sst_max:85, depth_min:80,   depth_max:800,   chl_min:0.15, chl_max:2.00, tip:'Weed lines, debris, floating objects. High chlorophyll edges.' },
+        wahoo:        { label:'Wahoo',           sst_min:74, sst_max:84, depth_min:200,  depth_max:1200,  chl_min:0.05, chl_max:0.40, tip:'Current edges at 100-200 fathoms. Warm clear blue water.' },
+        yellowfin:    { label:'Yellowfin Tuna',  sst_min:72, sst_max:82, depth_min:400,  depth_max:99999, chl_min:0.10, chl_max:0.60, tip:'Temperature breaks, current edges, bait pods.' },
+        blackfin:     { label:'Blackfin Tuna',   sst_min:70, sst_max:80, depth_min:150,  depth_max:600,   chl_min:0.10, chl_max:1.00, tip:'Nearshore humps, color changes, bait balls.' },
+        kingfish:     { label:'Kingfish',         sst_min:68, sst_max:80, depth_min:40,   depth_max:200,   chl_min:0.20, chl_max:2.00, tip:'Nearshore reefs and humps, bait schools.' },
+        cobia:        { label:'Cobia',            sst_min:68, sst_max:82, depth_min:40,   depth_max:300,   chl_min:0.15, chl_max:2.00, tip:'Structure, buoys, rays near surface.' },
+        tripletail:   { label:'Tripletail',       sst_min:72, sst_max:84, depth_min:20,   depth_max:150,   chl_min:0.10, chl_max:1.50, tip:'Floating debris, crab trap buoys, channel markers.' },
+      };
 
-      if (!response.ok) {
-        const errBody = await response.json().catch(() => ({}));
-        return err(response.status, errBody.error?.message || `Anthropic API error ${response.status}`);
+      // ── Scoring functions ──────────────────────────────────────
+      const scoreDepth = (d, t) => {
+        if (!d || d < 5 || d < t.depth_min || d > t.depth_max) return 0;
+        const ideal = t.depth_min + (Math.min(t.depth_max, t.depth_min * 4) - t.depth_min) * 0.4;
+        return 30 * Math.max(0, 1 - Math.abs(d - ideal) / Math.max(1, ideal));
+      };
+      const scoreSST = (f, t) => {
+        if (f == null) return 8;
+        if (f < t.sst_min || f > t.sst_max) return 0;
+        return 35 * (1 - Math.abs(f - (t.sst_min + t.sst_max) / 2) / ((t.sst_max - t.sst_min) / 2));
+      };
+      const scoreChl = (c, t) => {
+        if (c == null || c <= 0) return 8;
+        if (c < t.chl_min || c > t.chl_max) return 0;
+        return 25 * (1 - Math.abs(c - (t.chl_min + t.chl_max) / 2) / ((t.chl_max - t.chl_min) / 2));
+      };
+      const scoreCurrent = s => (s > 0.1 && s < 3.0) ? 10 * (1 - Math.abs(s - 1.0) / 2.0) : 0;
+
+      // ── Score grid ────────────────────────────────────────────
+      const thresholds = species.map(id => THRESHOLDS[id]).filter(Boolean);
+      if (!thresholds.length) return err(400, 'No valid species', event);
+
+      const DIRS = ['N','NNE','NE','ENE','E','ESE','SE','SSE','S','SSW','SW','WSW','W','WNW','NW','NNW'];
+
+      const scored = currentGrid
+        .filter(pt => (pt.depth || 0) > 5)
+        .map(pt => {
+          const sst = pt.sst_f ?? (pt.sst_c != null ? pt.sst_c * 9/5 + 32 : null);
+          const chl = pt.chl ?? null;
+          const depth = pt.depth ?? 0;
+          let s = 0;
+          for (const t of thresholds) {
+            s += scoreDepth(depth, t) + scoreSST(sst, t) + scoreChl(chl, t) + scoreCurrent(pt.speed_kt || 0);
+          }
+          return { ...pt, sst, chl, depth, score: parseFloat((s / thresholds.length).toFixed(2)) };
+        })
+        .filter(pt => pt.score > 5)
+        .sort((a, b) => b.score - a.score);
+
+      if (!scored.length) {
+        return err(422, 'No grid points match depth/SST requirements for selected species. Move pin to better habitat.', event);
       }
 
-      const data = await response.json();
-      return ok(data);
+      // ── Build prompt (never leaves server) ────────────────────
+      const top = scored.slice(0, 10);
+      const month = ['January','February','March','April','May','June','July','August','September','October','November','December'][new Date().getMonth()];
+      const spNames = [...new Set(thresholds.map(t => t.label))].join(', ');
+
+      const candidateBlock = top.map((p, i) => {
+        const dir = DIRS[Math.round((p.dir_deg || 0) / 22.5) % 16];
+        return `#${i+1} [score:${p.score}] ${p.lat.toFixed(4)}°N, ${p.lng.toFixed(4)}°W | depth:${p.depth > 0 ? Math.round(p.depth)+'ft' : 'unknown'} | SST:${p.sst != null ? p.sst.toFixed(1)+'°F' : 'no data'} | chl:${p.chl != null ? p.chl.toFixed(3)+' mg/m³' : 'no data'} | current:${(p.speed_kt||0).toFixed(2)}kt ${dir}`;
+      }).join('\n');
+
+      const avgSpd = (top.reduce((s,p) => s + (p.speed_kt||0), 0) / top.length).toFixed(2);
+      const aU = top.reduce((s,p) => s + (p.u||0), 0) / top.length;
+      const aV = top.reduce((s,p) => s + (p.v||0), 0) / top.length;
+      const domDir = DIRS[Math.round(((Math.atan2(aU, aV) * 180 / Math.PI + 360) % 360) / 22.5) % 16];
+
+      const systemPrompt = `You are a marine biologist and offshore fishing expert. You receive pre-scored ocean grid data with real measured sensor values and identify the best fishing hotspots. Cite specific data values in your reasoning. Respond ONLY with valid JSON.`;
+
+      const userPrompt = `Select the 4 best fishing hotspots for ${spNames} from these pre-scored candidates.
+
+Search center: ${parseFloat(lat).toFixed(4)}°N, ${Math.abs(parseFloat(lng)).toFixed(4)}°W — ${radiusMi || 50}mi radius. Month: ${month}.
+
+SCORED GRID (depth=NOAA charts, SST=MUR L4 satellite, chl=VIIRS, currents=Open-Meteo):
+${candidateBlock}
+
+SPECIES: ${thresholds.map(t => `${t.label}: SST ${t.sst_min}–${t.sst_max}°F, depth ${t.depth_min}–${t.depth_max === 99999 ? '∞' : t.depth_max}ft. ${t.tip}`).join(' | ')}
+
+Pick 4 candidates using their EXACT lat/lng. Name each after its oceanographic feature. Cite actual data values in the why field.
+
+Respond ONLY with JSON:
+{"overall":"...","conditions_rating":"Excellent|Good|Fair|Poor","avg_current_kt":"${avgSpd}","dominant_flow":"${domDir}","hotspots":[{"name":"feature name","location":"bearing and distance from center","lat":0.0000,"lng":0.0000,"why":"cite depth/SST/chl/current values","species":["${spNames}"],"primary_species":"primary species","technique":"specific method","confidence":"High|Medium|Low","depth_target":"depth range"}],"pro_tip":"actionable insight from today's data"}`;
+
+      // ── Call Claude with retry ────────────────────────────────
+      let aiResponse, attempts = 0;
+      while (attempts < 3) {
+        aiResponse = await fetch('https://api.anthropic.com/v1/messages', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'x-api-key': apiKey, 'anthropic-version': '2023-06-01' },
+          body: JSON.stringify({ model: 'claude-sonnet-4-20250514', max_tokens: 1500, system: systemPrompt, messages: [{ role: 'user', content: userPrompt }] }),
+        });
+        if (aiResponse.status !== 503) break;
+        attempts++;
+        await new Promise(r => setTimeout(r, 3000 * attempts));
+      }
+
+      if (!aiResponse.ok) {
+        const e = await aiResponse.json().catch(() => ({}));
+        return err(aiResponse.status, e.error?.message || `Anthropic error ${aiResponse.status}`, event);
+      }
+
+      const aiData  = await aiResponse.json();
+      const text    = aiData.content.map(i => i.text || '').join('').replace(/```json|```/g, '').trim();
+      const parsed  = JSON.parse(text);
+      (parsed.hotspots || []).forEach(hs => { if (hs.lon !== undefined && hs.lng === undefined) hs.lng = hs.lon; });
+
+      return ok(parsed, event);
     }
 
     // ── MARINE BATCH — multiple Open-Meteo current points ────────
     if (type === 'marine_batch') {
       const { points } = payload;
-      if (!Array.isArray(points) || points.length === 0) return err(400, 'Points array required');
-      if (points.length > 100) return err(400, 'Max 100 points per batch');
+      if (!Array.isArray(points) || points.length === 0) return err(400, 'Points array required', event);
+      if (points.length > 100) return err(400, 'Max 100 points per batch', event);
 
       const base = 'https://marine-api.open-meteo.com/v1/marine';
       const results = await Promise.all(
@@ -269,30 +369,30 @@ exports.handler = async (event) => {
           return null;
         })
       );
-      return ok({ results: results.filter(Boolean) });
+      return ok({ results: results.filter(Boolean) }, event);
     }
 
     // ── MARINE SINGLE ────────────────────────────────────────────
     if (type === 'marine') {
       const la = parseFloat(payload.lat), ln = parseFloat(payload.lng);
-      if (isNaN(la) || isNaN(ln)) return err(400, 'Invalid lat/lng');
+      if (isNaN(la) || isNaN(ln)) return err(400, 'Invalid lat/lng', event);
       const base = `https://marine-api.open-meteo.com/v1/marine?latitude=${la}&longitude=${ln}&current=ocean_current_velocity,ocean_current_direction,sea_surface_temperature&wind_speed_unit=kn`;
       for (const url of [`${base}&models=meteofrance_currents`, base]) {
         try {
           const res = await fetch(url);
           const data = await res.json();
-          if (!data.error && data.current?.ocean_current_velocity != null) return ok(data);
+          if (!data.error && data.current?.ocean_current_velocity != null) return ok(data, event);
         } catch (e) {}
       }
-      return err(502, 'No marine data available');
+      return err(502, 'No marine data available', event);
     }
 
     // ── GIBS — NASA satellite imagery proxy ──────────────────────
     if (type === 'gibs') {
       const { layer, date, width, height } = payload;
       const bounds = validateBounds(payload);
-      if (!bounds) return err(400, 'Invalid bounds');
-      if (!layer || !date) return err(400, 'Layer and date required');
+      if (!bounds) return err(400, 'Invalid bounds', event);
+      if (!layer || !date) return err(400, 'Layer and date required', event);
 
       const w = clamp(parseInt(width) || 800, 64, 2048);
       const h = clamp(parseInt(height) || 600, 64, 2048);
@@ -329,8 +429,8 @@ exports.handler = async (event) => {
     if (type === 'coastwatch') {
       const { dataset, variable, date, elevation } = payload;
       const bounds = validateBounds(payload);
-      if (!bounds) return err(400, 'Invalid bounds');
-      if (!dataset || !date) return err(400, 'Dataset and date required');
+      if (!bounds) return err(400, 'Invalid bounds', event);
+      if (!dataset || !date) return err(400, 'Dataset and date required', event);
 
       const w = clamp(parseInt(payload.width) || 800, 64, 2048);
       const h = clamp(parseInt(payload.height) || 600, 64, 2048);
@@ -377,11 +477,11 @@ exports.handler = async (event) => {
     if (type === 'cmems_currents') {
       const { dataset, date } = payload;
       const bounds = validateBounds(payload);
-      if (!bounds) return err(400, 'Invalid bounds');
+      if (!bounds) return err(400, 'Invalid bounds', event);
 
       const user = process.env.CMEMS_USER;
       const pass = process.env.CMEMS_PASS;
-      if (!user || !pass) return err(500, 'CMEMS credentials not configured (CMEMS_USER, CMEMS_PASS)');
+      if (!user || !pass) return err(500, 'CMEMS credentials not configured (CMEMS_USER, CMEMS_PASS)', event);
 
       const auth = Buffer.from(`${user}:${pass}`).toString('base64');
       const latStep = 0.2, lngStep = 0.2;
@@ -431,8 +531,8 @@ exports.handler = async (event) => {
 
       await Promise.allSettled(promises);
 
-      if (!results.length) return err(502, 'CMEMS returned no data — try Open-Meteo instead');
-      return ok({ points: results, count: results.length });
+      if (!results.length) return err(502, 'CMEMS returned no data — try Open-Meteo instead', event);
+      return ok({ points: results, count: results.length }, event);
     }
 
     // ── Unknown type ─────────────────────────────────────────────
