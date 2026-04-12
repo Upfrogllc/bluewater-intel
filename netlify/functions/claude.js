@@ -257,35 +257,34 @@ exports.handler = async (event) => {
       const thresholds = species.map(id => THRESHOLDS[id]).filter(Boolean);
       if (!thresholds.length) return err(400, 'No valid species', event);
 
-      // Compute combined depth window across all selected species
-      const depthMin = Math.min(...thresholds.map(t => t.depth_min));
-      const depthMax = Math.max(...thresholds.map(t => t.depth_max === 99999 ? 99999 : t.depth_max));
-
       const DIRS = ['N','NNE','NE','ENE','E','ESE','SE','SSE','S','SSW','SW','WSW','W','WNW','NW','NNW'];
 
       const scored = currentGrid
         .filter(pt => {
           const d = pt.depth || 0;
-          // If depth is unknown (0/null), allow it through — server can't verify
-          if (d < 5) return true;
-          // If depth IS known, hard-filter: must be within range of at least one species
-          return thresholds.some(t => d >= t.depth_min && d <= t.depth_max);
+          // Only hard-reject if depth is KNOWN and clearly wrong for all species
+          if (d >= 5) return thresholds.some(t => d >= t.depth_min && d <= t.depth_max);
+          return true; // unknown depth — let it through
         })
         .map(pt => {
-          const sst = pt.sst_f ?? (pt.sst_c != null ? pt.sst_c * 9/5 + 32 : null);
-          const chl = pt.chl ?? null;
-          const depth = pt.depth ?? 0;
+          const sst   = pt.sst_f ?? (pt.sst_c != null ? pt.sst_c * 9/5 + 32 : null);
+          const chl   = pt.chl ?? null;
+          const depth = pt.depth || 0;
           let s = 0;
           for (const t of thresholds) {
-            s += scoreDepth(depth, t) + scoreSST(sst, t) + scoreChl(chl, t) + scoreCurrent(pt.speed_kt || 0);
+            // Depth: full score if known+valid, partial credit (12pts) if unknown
+            const ds = depth >= 5
+              ? scoreDepth(depth, t)
+              : 12; // partial credit for unknown depth
+            s += ds + scoreSST(sst, t) + scoreChl(chl, t) + scoreCurrent(pt.speed_kt || 0);
           }
           return { ...pt, sst, chl, depth, score: parseFloat((s / thresholds.length).toFixed(2)) };
         })
-        .filter(pt => pt.score > 5)
+        .filter(pt => pt.score > 3) // lower threshold — depth-unknown points need to qualify
         .sort((a, b) => b.score - a.score);
 
       if (!scored.length) {
-        return err(422, 'No grid points matched the conditions for the selected species in this area. Try moving the pin or expanding the radius.', event);
+        return err(422, 'No suitable grid points found. Try expanding your search radius or moving the pin offshore.', event);
       }
 
       // ── Build prompt (never leaves server) ────────────────────
@@ -305,10 +304,11 @@ exports.handler = async (event) => {
 
       const systemPrompt = `You are a marine biologist and offshore fishing expert. You receive pre-scored ocean grid data with real measured sensor values and identify the best fishing hotspots. Cite specific data values in your reasoning. Respond ONLY with valid JSON.`;
 
-      // Build hard depth constraint string for the prompt
-      const depthConstraintStr = thresholds.map(t =>
-        `${t.label}: ONLY recommend spots between ${t.depth_min}ft and ${t.depth_max === 99999 ? '∞' : t.depth_max + 'ft'} depth. NEVER recommend spots outside this range.`
-      ).join('\n');
+      // Build depth constraint — only enforce when depth data actually exists
+      const hasDepthData = top.some(p => (p.depth || 0) >= 5);
+      const depthConstraintStr = hasDepthData
+        ? thresholds.map(t => `${t.label}: ONLY recommend spots between ${t.depth_min}ft and ${t.depth_max === 99999 ? '∞' : t.depth_max + 'ft'} — reject any spot outside this range.`).join('\n')
+        : thresholds.map(t => `${t.label}: target depth range is ${t.depth_min}–${t.depth_max === 99999 ? '∞' : t.depth_max + 'ft'}. Depth data is unavailable for these points — use SST, chlorophyll, and current patterns to infer likely habitat zones and still provide your best recommendations.`).join('\n');
 
       const userPrompt = `Select the 4 best fishing hotspots for ${spNames} from these pre-scored candidates.
 
@@ -360,11 +360,9 @@ Respond ONLY with JSON:
 
       (parsed.hotspots || []).forEach(hs => { if (hs.lon !== undefined && hs.lng === undefined) hs.lng = hs.lon; });
 
-      // Hard post-filter: remove any hotspot Claude picked that's outside depth range
-      // Match hotspot back to its scored grid point and verify depth
-      if (parsed.hotspots) {
+      // Post-filter: remove hotspots Claude picked that have KNOWN bad depth
+      if (parsed.hotspots && hasDepthData) {
         parsed.hotspots = parsed.hotspots.filter(hs => {
-          // Find the closest scored candidate to this hotspot
           const hsLat = parseFloat(hs.lat), hsLng = parseFloat(hs.lng);
           if (isNaN(hsLat) || isNaN(hsLng)) return false;
           let closest = null, closestDist = Infinity;
@@ -374,9 +372,15 @@ Respond ONLY with JSON:
           }
           if (!closest) return false;
           const depth = closest.depth || 0;
-          // Must be within depth range of at least one selected species
+          // Only reject if depth is actually known and wrong
+          if (depth < 5) return true;
           return thresholds.some(t => depth >= t.depth_min && depth <= t.depth_max);
         });
+      } else if (parsed.hotspots) {
+        // No depth data — just validate lat/lng are present
+        parsed.hotspots = parsed.hotspots.filter(hs =>
+          !isNaN(parseFloat(hs.lat)) && !isNaN(parseFloat(hs.lng))
+        );
       }
 
       return ok(parsed, event);
