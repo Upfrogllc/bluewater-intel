@@ -83,6 +83,16 @@ function validateBounds(payload) {
   };
 }
 
+/** Detect region from latitude (aligned with speciesPrompts.js buckets) */
+function detectRegion(lat) {
+  const la = parseFloat(lat);
+  if (isNaN(la)) return 'SE_FLORIDA';
+  if (la >= 24.5 && la < 29.5) return 'SE_FLORIDA';
+  if (la >= 29.5 && la < 37.5) return 'MID_ATLANTIC';
+  if (la >= 37.5 && la <= 45.0) return 'NORTHEAST';
+  return 'SE_FLORIDA';
+}
+
 // ── Rate limiting ────────────────────────────────────────────────
 // Auth endpoint: strict (brute-force protection)
 const authAttempts = new Map();
@@ -219,6 +229,8 @@ exports.handler = async (event) => {
       if (!currentGrid?.length) return err(400, 'No current data', event);
       if (!lat || !lng)         return err(400, 'No pin location', event);
 
+      const region = detectRegion(lat);
+
       // ── Species thresholds — server-side only, never sent to client ──
       const THRESHOLDS = {
         blue_marlin:  { label:'Blue Marlin',    sst_min:76, sst_max:86, depth_min:800,  depth_max:99999, chl_min:0.01, chl_max:0.30, tip:'Warm core eddies, deep blue water, Gulf Stream edge.' },
@@ -234,6 +246,18 @@ exports.handler = async (event) => {
         cobia:        { label:'Cobia',            sst_min:68, sst_max:82, depth_min:40,   depth_max:300,   chl_min:0.15, chl_max:2.00, tip:'Structure, buoys, rays near surface.' },
         tripletail:   { label:'Tripletail',       sst_min:72, sst_max:84, depth_min:20,   depth_max:150,   chl_min:0.10, chl_max:1.50, tip:'Floating debris, crab trap buoys, channel markers.' },
       };
+
+      // Region-specific biology override: SE Florida sailfish profile
+      if (region === 'SE_FLORIDA' && THRESHOLDS.sailfish) {
+        THRESHOLDS.sailfish = {
+          ...THRESHOLDS.sailfish,
+          depth_min: 60,
+          depth_max: 200,
+          chl_min: 0.14,
+          chl_max: 0.34,
+          tip: 'SE Florida sailfish: reef ledge/current edges, mostly 60–200ft (best 80–150ft), target chlorophyll 0.14–0.34 mg/m³.',
+        };
+      }
 
       // ── Scoring functions ──────────────────────────────────────
       const scoreDepth = (d, t) => {
@@ -260,12 +284,6 @@ exports.handler = async (event) => {
       const DIRS = ['N','NNE','NE','ENE','E','ESE','SE','SSE','S','SSW','SW','WSW','W','WNW','NW','NNW'];
 
       const scored = currentGrid
-        .filter(pt => {
-          const d = pt.depth || 0;
-          // Only hard-reject if depth is KNOWN and clearly wrong for all species
-          if (d >= 5) return thresholds.some(t => d >= t.depth_min && d <= t.depth_max);
-          return true; // unknown depth — let it through
-        })
         .map(pt => {
           const sst   = pt.sst_f ?? (pt.sst_c != null ? pt.sst_c * 9/5 + 32 : null);
           const chl   = pt.chl ?? null;
@@ -280,15 +298,14 @@ exports.handler = async (event) => {
           }
           return { ...pt, sst, chl, depth, score: parseFloat((s / thresholds.length).toFixed(2)) };
         })
-        .filter(pt => pt.score > 3) // lower threshold — depth-unknown points need to qualify
         .sort((a, b) => b.score - a.score);
 
       if (!scored.length) {
-        return err(422, 'No suitable grid points found. Try expanding your search radius or moving the pin offshore.', event);
+        return err(422, 'No grid points available in this search area. Try expanding your search radius or moving the pin offshore.', event);
       }
 
       // ── Build prompt (never leaves server) ────────────────────
-      const top = scored.slice(0, 10);
+      const top = scored.slice(0, 12);
       const month = ['January','February','March','April','May','June','July','August','September','October','November','December'][new Date().getMonth()];
       const spNames = [...new Set(thresholds.map(t => t.label))].join(', ');
 
@@ -310,9 +327,10 @@ exports.handler = async (event) => {
         ? thresholds.map(t => `${t.label}: ONLY recommend spots between ${t.depth_min}ft and ${t.depth_max === 99999 ? '∞' : t.depth_max + 'ft'} — reject any spot outside this range.`).join('\n')
         : thresholds.map(t => `${t.label}: target depth range is ${t.depth_min}–${t.depth_max === 99999 ? '∞' : t.depth_max + 'ft'}. Depth data is unavailable for these points — use SST, chlorophyll, and current patterns to infer likely habitat zones and still provide your best recommendations.`).join('\n');
 
-      const userPrompt = `Select the 4 best fishing hotspots for ${spNames} from these pre-scored candidates.
+      const userPrompt = `Select the 3 best fishing hotspots for ${spNames} from these pre-scored candidates.
 
 Search center: ${parseFloat(lat).toFixed(4)}°N, ${Math.abs(parseFloat(lng)).toFixed(4)}°W — ${radiusMi || 50}mi radius. Month: ${month}.
+Region profile: ${region}.
 
 SCORED GRID (depth=NOAA charts, SST=MUR L4 satellite, chl=VIIRS, currents=Open-Meteo):
 ${candidateBlock}
@@ -323,7 +341,8 @@ ANY candidate with depth outside the required range MUST be excluded. Do not rec
 
 SPECIES NOTES: ${thresholds.map(t => `${t.label}: ${t.tip}`).join(' | ')}
 
-Pick 4 candidates using their EXACT lat/lng. Name each after its oceanographic feature (e.g. "78°F SST Break", "1.2kt NE Current Edge", "120ft Reef Ledge"). Cite actual depth/SST/chl/current values in the why field.
+Pick exactly 3 candidates using their EXACT lat/lng. Name each after its oceanographic feature (e.g. "78°F SST Break", "1.2kt NE Current Edge", "120ft Reef Ledge"). Cite actual depth/SST/chl/current values in the why field.
+If conditions are weak, still return the best 3 possible candidates from this ring and explicitly mention the limitation in "why" and/or "overall".
 
 Respond ONLY with JSON:
 {"overall":"...","conditions_rating":"Excellent|Good|Fair|Poor","avg_current_kt":"${avgSpd}","dominant_flow":"${domDir}","hotspots":[{"name":"feature name","location":"bearing and distance from center","lat":0.0000,"lng":0.0000,"why":"cite depth/SST/chl/current values","species":["${spNames}"],"primary_species":"primary species","technique":"specific method","confidence":"High|Medium|Low","depth_target":"depth range in feet"}],"pro_tip":"actionable insight from today's data"}`;
@@ -382,6 +401,31 @@ Respond ONLY with JSON:
           !isNaN(parseFloat(hs.lat)) && !isNaN(parseFloat(hs.lng))
         );
       }
+
+      // Always return the best 3 possible hotspots in-ring, even in weak conditions.
+      parsed.hotspots = Array.isArray(parsed.hotspots) ? parsed.hotspots : [];
+      const seen = new Set(
+        parsed.hotspots.map(h => `${parseFloat(h.lat).toFixed(4)},${parseFloat(h.lng).toFixed(4)}`)
+      );
+      for (const pt of scored) {
+        if (parsed.hotspots.length >= 3) break;
+        const key = `${parseFloat(pt.lat).toFixed(4)},${parseFloat(pt.lng).toFixed(4)}`;
+        if (seen.has(key)) continue;
+        parsed.hotspots.push({
+          name: `Best Available #${parsed.hotspots.length + 1}`,
+          location: 'Within selected search ring',
+          lat: parseFloat(pt.lat.toFixed(4)),
+          lng: parseFloat(pt.lng.toFixed(4)),
+          why: `Fallback candidate from ranked grid (score ${pt.score}). Conditions may be suboptimal, but this is among the best available options in this ring.`,
+          species: [...new Set(thresholds.map(t => t.label))],
+          primary_species: thresholds[0]?.label || 'Mixed',
+          technique: 'Work current edges and nearby structure; adjust presentation to bait marks and sea state.',
+          confidence: 'Low',
+          depth_target: pt.depth > 0 ? `${Math.round(pt.depth)}ft` : 'Unknown depth',
+        });
+        seen.add(key);
+      }
+      parsed.hotspots = parsed.hotspots.slice(0, 3);
 
       return ok(parsed, event);
     }
