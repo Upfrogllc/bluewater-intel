@@ -321,11 +321,10 @@ exports.handler = async (event) => {
 
       const systemPrompt = `You are a marine biologist and offshore fishing expert. You receive pre-scored ocean grid data with real measured sensor values and identify the best fishing hotspots. Cite specific data values in your reasoning. Respond ONLY with valid JSON.`;
 
-      // Build depth constraint — only enforce when depth data actually exists
-      const hasDepthData = top.some(p => (p.depth || 0) >= 5);
-      const depthConstraintStr = hasDepthData
-        ? thresholds.map(t => `${t.label}: ONLY recommend spots between ${t.depth_min}ft and ${t.depth_max === 99999 ? '∞' : t.depth_max + 'ft'} — reject any spot outside this range.`).join('\n')
-        : thresholds.map(t => `${t.label}: target depth range is ${t.depth_min}–${t.depth_max === 99999 ? '∞' : t.depth_max + 'ft'}. Depth data is unavailable for these points — use SST, chlorophyll, and current patterns to infer likely habitat zones and still provide your best recommendations.`).join('\n');
+      // Depth guidance is preference-weighted, not hard-rejected, so we always return best-available spots.
+      const depthConstraintStr = thresholds.map(t =>
+        `${t.label}: preferred depth range ${t.depth_min}–${t.depth_max === 99999 ? '∞' : t.depth_max + 'ft'}. Outside-range points are allowed only as weaker fallback picks when conditions are poor.`
+      ).join('\n');
 
       const userPrompt = `Select the 3 best fishing hotspots for ${spNames} from these pre-scored candidates.
 
@@ -335,9 +334,8 @@ Region profile: ${region}.
 SCORED GRID (depth=NOAA charts, SST=MUR L4 satellite, chl=VIIRS, currents=Open-Meteo):
 ${candidateBlock}
 
-HARD DEPTH REQUIREMENTS — THESE ARE ABSOLUTE, NON-NEGOTIABLE:
+DEPTH PREFERENCES (SOFT CONSTRAINTS):
 ${depthConstraintStr}
-ANY candidate with depth outside the required range MUST be excluded. Do not recommend it under any circumstances.
 
 SPECIES NOTES: ${thresholds.map(t => `${t.label}: ${t.tip}`).join(' | ')}
 
@@ -379,24 +377,8 @@ Respond ONLY with JSON:
 
       (parsed.hotspots || []).forEach(hs => { if (hs.lon !== undefined && hs.lng === undefined) hs.lng = hs.lon; });
 
-      // Post-filter: remove hotspots Claude picked that have KNOWN bad depth
-      if (parsed.hotspots && hasDepthData) {
-        parsed.hotspots = parsed.hotspots.filter(hs => {
-          const hsLat = parseFloat(hs.lat), hsLng = parseFloat(hs.lng);
-          if (isNaN(hsLat) || isNaN(hsLng)) return false;
-          let closest = null, closestDist = Infinity;
-          for (const pt of scored) {
-            const d = Math.abs(pt.lat - hsLat) + Math.abs(pt.lng - hsLng);
-            if (d < closestDist) { closestDist = d; closest = pt; }
-          }
-          if (!closest) return false;
-          const depth = closest.depth || 0;
-          // Only reject if depth is actually known and wrong
-          if (depth < 5) return true;
-          return thresholds.some(t => depth >= t.depth_min && depth <= t.depth_max);
-        });
-      } else if (parsed.hotspots) {
-        // No depth data — just validate lat/lng are present
+      // Validate lat/lng from model output
+      if (parsed.hotspots) {
         parsed.hotspots = parsed.hotspots.filter(hs =>
           !isNaN(parseFloat(hs.lat)) && !isNaN(parseFloat(hs.lng))
         );
