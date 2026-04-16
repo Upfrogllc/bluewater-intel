@@ -263,6 +263,35 @@ input[type=range].rng.sst-rng::-moz-range-thumb{background:var(--hot);}
 
 /* ── Spot data popup ── */
 #spot-popup{display:none;position:absolute;z-index:1200;background:var(--panel2);border:1px solid var(--teal);border-radius:8px;padding:0;min-width:260px;max-width:300px;backdrop-filter:blur(14px);box-shadow:0 4px 32px #00000066,0 0 20px #00d4b822;pointer-events:all;}
+
+/* ── Satellite Viewer Panel ── */
+#sat-viewer-panel{display:none;position:absolute;top:56px;left:54px;z-index:1100;width:300px;background:var(--panel2);border:1px solid var(--border);border-radius:8px;backdrop-filter:blur(16px);box-shadow:0 8px 40px #00000088;pointer-events:all;overflow:hidden;}
+#sat-viewer-panel.open{display:block;animation:svp-in .18s ease;}
+@keyframes svp-in{from{opacity:0;transform:translateX(-8px)}to{opacity:1;transform:none}}
+.svp-header{display:flex;align-items:center;justify-content:space-between;padding:10px 12px 8px;border-bottom:1px solid var(--border);}
+.svp-title{font-family:'Bebas Neue';font-size:14px;letter-spacing:2px;color:var(--teal);}
+.svp-close{background:transparent;border:none;color:var(--muted);font-size:14px;cursor:pointer;padding:0 2px;line-height:1;}
+.svp-close:hover{color:var(--text);}
+.svp-body{padding:10px 12px 12px;}
+.svp-section-label{font-family:'Space Mono';font-size:7px;letter-spacing:2px;color:var(--muted);text-transform:uppercase;margin-bottom:5px;}
+.svp-dataset-grid{display:grid;grid-template-columns:1fr 1fr 1fr;gap:4px;}
+.svp-ds{padding:5px 4px;font-family:'Space Mono';font-size:8px;background:var(--panel);border:1px solid var(--border);color:var(--muted);border-radius:4px;cursor:pointer;transition:all .15s;text-align:center;}
+.svp-ds:hover{border-color:var(--teal);color:var(--teal);}
+.svp-ds.active{border-color:var(--teal);background:#00d4b814;color:var(--teal);}
+.svp-date-row{display:flex;align-items:center;gap:6px;margin-bottom:8px;}
+.svp-date-btn{background:var(--panel);border:1px solid var(--border);color:var(--muted);border-radius:4px;width:26px;height:26px;cursor:pointer;font-size:10px;display:flex;align-items:center;justify-content:center;}
+.svp-date-btn:hover{border-color:var(--teal);color:var(--teal);}
+#svp-preview{min-height:120px;background:#000a14;border-radius:6px;border:1px solid var(--border);display:flex;align-items:center;justify-content:center;overflow:hidden;position:relative;margin-bottom:8px;}
+#svp-preview-placeholder{text-align:center;padding:20px;}
+.svp-spinner{width:20px;height:20px;border:2px solid var(--border);border-top-color:var(--teal);border-radius:50%;animation:spin .8s linear infinite;margin:0 auto 8px;}
+@keyframes spin{to{transform:rotate(360deg)}}
+.svp-actions{display:flex;gap:6px;margin-top:8px;}
+.svp-btn-fetch{flex:1;padding:7px;background:var(--panel);border:1px solid var(--teal);color:var(--teal);border-radius:5px;font-family:'Space Mono';font-size:8px;cursor:pointer;transition:all .15s;}
+.svp-btn-fetch:hover{background:#00d4b814;}
+.svp-btn-overlay{flex:1;padding:7px;background:var(--teal);border:1px solid var(--teal);color:var(--deep);border-radius:5px;font-family:'Space Mono';font-size:8px;cursor:pointer;font-weight:bold;transition:all .15s;}
+.svp-btn-overlay:disabled{background:var(--panel);border-color:var(--border);color:var(--muted);cursor:not-allowed;}
+.svp-btn-overlay:not(:disabled):hover{background:#00ffcc;}
+@media(max-width:768px){#sat-viewer-panel{left:6px;right:6px;width:auto;top:auto;bottom:140px;}}
 #spot-popup .sp-hdr{padding:9px 12px 7px;border-bottom:1px solid var(--border);display:flex;align-items:center;justify-content:space-between;}
 #spot-popup .sp-title{font-family:'Bebas Neue';font-size:15px;letter-spacing:2px;color:var(--teal);}
 #spot-popup .sp-close{background:transparent;border:none;color:var(--muted);font-size:16px;cursor:pointer;line-height:1;padding:0 2px;}
@@ -838,10 +867,82 @@ input[type=range].rng.sst-rng::-moz-range-thumb{background:var(--hot);}
       <div class="tbtn" id="tbtn-navionics" onclick="toggleNavionics()" title="Open in Navionics">
         ⚓<div class="tt">Open in Navionics ↗</div>
       </div>
+      <div class="tbtn" id="tbtn-sat-viewer" onclick="toggleSatViewer()" title="Satellite Imagery">
+        🛰<div class="tt">Satellite Image Viewer</div>
+      </div>
     </div>
 
     <!-- Measure banner -->
     <div id="measure-banner">📏 MEASURE MODE — Click first point</div>
+
+    <!-- Satellite Image Viewer Panel -->
+    <div id="sat-viewer-panel">
+      <div class="svp-header">
+        <span class="svp-title">🛰 SATELLITE IMAGERY</span>
+        <button class="svp-close" onclick="toggleSatViewer()">✕</button>
+      </div>
+      <div class="svp-body">
+        <!-- Dataset selector -->
+        <div class="svp-section-label">DATASET</div>
+        <div class="svp-dataset-grid">
+          <button class="svp-ds active" data-ds="noaa20_sst" onclick="selectSatDataset(this,'noaa20_sst')">NOAA-20 SST</button>
+          <button class="svp-ds" data-ds="snpp_sst" onclick="selectSatDataset(this,'snpp_sst')">SNPP SST</button>
+          <button class="svp-ds" data-ds="mur_sst" onclick="selectSatDataset(this,'mur_sst')">MUR SST 1km</button>
+          <button class="svp-ds" data-ds="noaa20_chl" onclick="selectSatDataset(this,'noaa20_chl')">NOAA-20 CHL</button>
+          <button class="svp-ds" data-ds="snpp_chl" onclick="selectSatDataset(this,'snpp_chl')">SNPP CHL</button>
+          <button class="svp-ds" data-ds="noaa20_chl_8d" onclick="selectSatDataset(this,'noaa20_chl_8d')">CHL 8-day</button>
+        </div>
+
+        <!-- Date selector -->
+        <div class="svp-section-label" style="margin-top:10px">DATE <span style="color:var(--muted);font-size:8px">(most recent available)</span></div>
+        <div class="svp-date-row">
+          <button class="svp-date-btn" onclick="shiftSatDate(-1)">◀</button>
+          <span id="svp-date-label" style="font-family:'Space Mono';font-size:10px;color:var(--text);flex:1;text-align:center"></span>
+          <button class="svp-date-btn" onclick="shiftSatDate(1)">▶</button>
+        </div>
+
+        <!-- Preview area -->
+        <div id="svp-preview">
+          <div id="svp-preview-placeholder">
+            <div style="font-size:24px;margin-bottom:8px">🛰</div>
+            <div style="font-family:'Space Mono';font-size:9px;color:var(--muted)">SELECT DATASET<br>TO LOAD IMAGE</div>
+          </div>
+          <img id="svp-preview-img" style="display:none;width:100%;border-radius:4px;cursor:pointer" onclick="overlayOnMap()" title="Click to overlay on map"/>
+          <div id="svp-loading" style="display:none;text-align:center;padding:20px;font-family:'Space Mono';font-size:9px;color:var(--teal)">
+            <div class="svp-spinner"></div>
+            FETCHING SATELLITE PASS...
+          </div>
+          <div id="svp-error" style="display:none;text-align:center;padding:16px;font-family:'Space Mono';font-size:9px;color:var(--hot)"></div>
+        </div>
+
+        <!-- Image metadata -->
+        <div id="svp-meta" style="display:none;font-family:'Space Mono';font-size:8px;padding:6px 0;border-top:1px solid var(--border);margin-top:6px">
+          <div style="display:flex;justify-content:space-between;color:var(--muted)">
+            <span id="svp-meta-date"></span>
+            <span id="svp-meta-stale"></span>
+          </div>
+          <div id="svp-meta-label" style="color:var(--teal);margin-top:2px"></div>
+        </div>
+
+        <!-- Action buttons -->
+        <div class="svp-actions">
+          <button class="svp-btn-fetch" onclick="fetchSatImage()">⟳ FETCH PASS</button>
+          <button class="svp-btn-overlay" id="svp-overlay-btn" onclick="overlayOnMap()" disabled>📡 OVERLAY ON MAP</button>
+        </div>
+
+        <!-- Opacity slider (shown when overlaid) -->
+        <div id="svp-opacity-row" style="display:none;margin-top:8px">
+          <div class="svp-section-label">OVERLAY OPACITY</div>
+          <div style="display:flex;align-items:center;gap:8px">
+            <input type="range" id="svp-opacity" min="0" max="1" step="0.05" value="0.75"
+              oninput="updateSatOverlayOpacity(this.value)"
+              style="flex:1;accent-color:var(--teal)"/>
+            <span id="svp-opacity-val" style="font-family:'Space Mono';font-size:9px;color:var(--teal);width:28px">75%</span>
+          </div>
+          <button onclick="removeSatOverlay()" style="margin-top:6px;width:100%;padding:5px;background:transparent;border:1px solid var(--hot);color:var(--hot);border-radius:4px;font-family:'Space Mono';font-size:9px;cursor:pointer">✕ REMOVE OVERLAY</button>
+        </div>
+      </div>
+    </div>
 
     <!-- Pin drop banner — shown during analyze flow step 2 -->
     <div id="pin-banner" style="display:none;position:absolute;top:54px;left:50%;transform:translateX(-50%);z-index:1100;background:var(--warm);color:var(--deep);border-radius:6px;padding:8px 20px;font-family:'Bebas Neue';font-size:16px;letter-spacing:2px;pointer-events:none;white-space:nowrap;box-shadow:0 2px 16px #f5a62355">
@@ -1583,6 +1684,176 @@ function closeSpotPopup() {
 // ═══════════════════════════════════════════
 // MEASURE TOOL (Leaflet)
 // ═══════════════════════════════════════════
+// ═══════════════════════════════════════════
+// SATELLITE IMAGE VIEWER
+// ═══════════════════════════════════════════
+
+const SAT_DATASETS = {
+  noaa20_sst:    { label: 'NOAA-20 VIIRS SST',      type: 'sst', res: '750m' },
+  snpp_sst:      { label: 'SNPP VIIRS SST',          type: 'sst', res: '750m' },
+  mur_sst:       { label: 'MUR L4 SST',              type: 'sst', res: '1km'  },
+  noaa20_chl:    { label: 'NOAA-20 Chlorophyll',     type: 'chl', res: '750m' },
+  snpp_chl:      { label: 'SNPP Chlorophyll',        type: 'chl', res: '750m' },
+  noaa20_chl_8d: { label: 'NOAA-20 CHL 8-day',      type: 'chl', res: '750m' },
+};
+
+let satViewerOpen = false;
+let satViewerDataset = 'noaa20_sst';
+let satViewerDate = null;     // ISO date string
+let satViewerImageData = null; // { image, date, label, bbox }
+let satViewerOverlay = null;  // Leaflet ImageOverlay
+
+function initSatViewerDate() {
+  // Default to yesterday (NRT lag)
+  const d = new Date();
+  d.setDate(d.getDate() - 1);
+  satViewerDate = d.toISOString().slice(0, 10);
+  document.getElementById('svp-date-label').textContent = satViewerDate;
+}
+
+function toggleSatViewer() {
+  satViewerOpen = !satViewerOpen;
+  const panel = document.getElementById('sat-viewer-panel');
+  const btn = document.getElementById('tbtn-sat-viewer');
+  panel.classList.toggle('open', satViewerOpen);
+  btn.classList.toggle('active', satViewerOpen);
+  if (satViewerOpen && !satViewerDate) initSatViewerDate();
+}
+
+function selectSatDataset(el, ds) {
+  document.querySelectorAll('.svp-ds').forEach(b => b.classList.remove('active'));
+  el.classList.add('active');
+  satViewerDataset = ds;
+  // Clear current preview if dataset changes
+  satViewerImageData = null;
+  document.getElementById('svp-preview-img').style.display = 'none';
+  document.getElementById('svp-preview-placeholder').style.display = 'flex';
+  document.getElementById('svp-preview-placeholder').style.flexDirection = 'column';
+  document.getElementById('svp-preview-placeholder').style.alignItems = 'center';
+  document.getElementById('svp-meta').style.display = 'none';
+  document.getElementById('svp-overlay-btn').disabled = true;
+}
+
+function shiftSatDate(delta) {
+  if (!satViewerDate) initSatViewerDate();
+  const d = new Date(satViewerDate + 'T12:00:00Z');
+  d.setDate(d.getDate() + delta);
+  // Don't allow future dates
+  const today = new Date();
+  today.setHours(0,0,0,0);
+  if (d >= today) return;
+  satViewerDate = d.toISOString().slice(0, 10);
+  document.getElementById('svp-date-label').textContent = satViewerDate;
+}
+
+async function fetchSatImage() {
+  if (!satViewerDate) initSatViewerDate();
+
+  // Get current map bbox or use default SE Florida area
+  let bbox;
+  if (map) {
+    const b = map.getBounds();
+    bbox = {
+      south: Math.max(b.getSouth(), 23),
+      north: Math.min(b.getNorth(), 32),
+      west:  Math.max(b.getWest(), -84),
+      east:  Math.min(b.getEast(), -77),
+    };
+  } else {
+    bbox = { south: 24.0, north: 31.0, west: -83.0, east: -78.0 };
+  }
+
+  // Show loading
+  document.getElementById('svp-preview-placeholder').style.display = 'none';
+  document.getElementById('svp-preview-img').style.display = 'none';
+  document.getElementById('svp-error').style.display = 'none';
+  document.getElementById('svp-loading').style.display = 'block';
+  document.getElementById('svp-overlay-btn').disabled = true;
+
+  try {
+    const res = await fetch('/.netlify/functions/sat-tiles', {
+      method: 'POST',
+      headers: BW_HEADERS,
+      body: JSON.stringify({
+        dataset: satViewerDataset,
+        date: satViewerDate,
+        ...bbox,
+        width: 900,
+        height: 600,
+      })
+    });
+
+    document.getElementById('svp-loading').style.display = 'none';
+
+    if (!res.ok) {
+      const e = await res.json().catch(() => ({}));
+      document.getElementById('svp-error').textContent = e.error || `Error ${res.status} — try a different date or dataset`;
+      document.getElementById('svp-error').style.display = 'block';
+      return;
+    }
+
+    const data = await res.json();
+    satViewerImageData = data;
+
+    // Show preview
+    const img = document.getElementById('svp-preview-img');
+    img.src = data.image;
+    img.style.display = 'block';
+
+    // Show metadata
+    const staleStr = data.stale_days > 0 ? ` · ${data.stale_days}d old` : ' · Today';
+    document.getElementById('svp-meta-date').textContent = `📅 ${data.date}${staleStr}`;
+    document.getElementById('svp-meta-stale').textContent = data.stale_days > 1 ? '⚠️ Stale' : '✓ Fresh';
+    document.getElementById('svp-meta-label').textContent = `🛰 ${data.label}`;
+    document.getElementById('svp-meta').style.display = 'block';
+    document.getElementById('svp-overlay-btn').disabled = false;
+
+  } catch(e) {
+    document.getElementById('svp-loading').style.display = 'none';
+    document.getElementById('svp-error').textContent = 'Network error — check connection';
+    document.getElementById('svp-error').style.display = 'block';
+  }
+}
+
+function overlayOnMap() {
+  if (!satViewerImageData || !map) return;
+  const d = satViewerImageData;
+  const bounds = [[d.bbox.south, d.bbox.west], [d.bbox.north, d.bbox.east]];
+  const opacity = parseFloat(document.getElementById('svp-opacity').value);
+
+  if (satViewerOverlay) {
+    satViewerOverlay.setUrl(d.image);
+    satViewerOverlay.setBounds(bounds);
+    satViewerOverlay.setOpacity(opacity);
+  } else {
+    satViewerOverlay = L.imageOverlay(d.image, bounds, {
+      opacity,
+      pane: 'satPane',
+      interactive: false,
+      zIndex: 300,
+    }).addTo(map);
+  }
+
+  // Fit map to image bounds
+  map.fitBounds(bounds, { padding: [20, 20] });
+
+  // Show opacity control
+  document.getElementById('svp-opacity-row').style.display = 'block';
+}
+
+function updateSatOverlayOpacity(val) {
+  document.getElementById('svp-opacity-val').textContent = Math.round(val * 100) + '%';
+  if (satViewerOverlay) satViewerOverlay.setOpacity(parseFloat(val));
+}
+
+function removeSatOverlay() {
+  if (satViewerOverlay && map) {
+    map.removeLayer(satViewerOverlay);
+    satViewerOverlay = null;
+  }
+  document.getElementById('svp-opacity-row').style.display = 'none';
+}
+
 function toggleNavionics() {
   // Navionics blocks iframes — open in new tab synced to current map view
   const center = map ? map.getCenter() : {lat: 27.17, lng: -80.18};
