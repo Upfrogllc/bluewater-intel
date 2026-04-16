@@ -208,6 +208,8 @@ exports.handler = async (event) => {
       total_points: rows.length,
       valid_points: validCount,
       coverage_pct: Math.round(validCount / rows.length * 100),
+      // Raw grid for client-side re-render when sliders change
+      raw: { lats: uniqLats, lngs: uniqLngs, values: uniqLats.map(la => uniqLngs.map(ln => grid[la.toFixed(4)]?.[ln.toFixed(4)] ?? null)) },
     })
   };
 };
