@@ -1749,18 +1749,22 @@ function shiftSatDate(delta) {
 async function fetchSatImage() {
   if (!satViewerDate) initSatViewerDate();
 
-  // Get current map bbox or use default SE Florida area
+  // Get current map bbox — cap extent to avoid giant images
   let bbox;
   if (map) {
     const b = map.getBounds();
+    const centerLat = (b.getSouth() + b.getNorth()) / 2;
+    const centerLng = (b.getWest() + b.getEast()) / 2;
+    // Max 6° lat x 6° lng (~400x400 miles) to keep image size manageable
+    const span = 3.0;
     bbox = {
-      south: Math.max(b.getSouth(), 23),
-      north: Math.min(b.getNorth(), 32),
-      west:  Math.max(b.getWest(), -84),
-      east:  Math.min(b.getEast(), -77),
+      south: Math.max(centerLat - span, 23),
+      north: Math.min(centerLat + span, 32),
+      west:  Math.max(centerLng - span * 1.2, -84),
+      east:  Math.min(centerLng + span * 1.2, -77),
     };
   } else {
-    bbox = { south: 24.0, north: 31.0, west: -83.0, east: -78.0 };
+    bbox = { south: 25.0, north: 30.0, west: -82.0, east: -79.0 };
   }
 
   // Show loading
@@ -1778,8 +1782,8 @@ async function fetchSatImage() {
         dataset: satViewerDataset,
         date: satViewerDate,
         ...bbox,
-        width: 900,
-        height: 600,
+        width: 600,
+        height: 400,
       })
     });
 
