@@ -265,7 +265,7 @@ input[type=range].rng.sst-rng::-moz-range-thumb{background:var(--hot);}
 #spot-popup{display:none;position:absolute;z-index:1200;background:var(--panel2);border:1px solid var(--teal);border-radius:8px;padding:0;min-width:260px;max-width:300px;backdrop-filter:blur(14px);box-shadow:0 4px 32px #00000066,0 0 20px #00d4b822;pointer-events:all;}
 
 /* ── Satellite Viewer Panel ── */
-#sat-viewer-panel{display:none;position:absolute;top:56px;left:54px;z-index:1100;width:300px;background:var(--panel2);border:1px solid var(--border);border-radius:8px;backdrop-filter:blur(16px);box-shadow:0 8px 40px #00000088;pointer-events:all;overflow:hidden;}
+#sat-viewer-panel{display:none;position:absolute;top:56px;left:54px;z-index:1100;width:320px;background:var(--panel2);border:1px solid var(--teal);border-radius:8px;backdrop-filter:blur(16px);box-shadow:0 8px 40px #00000088,0 0 20px #00d4b822;pointer-events:all;overflow:hidden;}
 #sat-viewer-panel.open{display:block;animation:svp-in .18s ease;}
 @keyframes svp-in{from{opacity:0;transform:translateX(-8px)}to{opacity:1;transform:none}}
 .svp-header{display:flex;align-items:center;justify-content:space-between;padding:10px 12px 8px;border-bottom:1px solid var(--border);}
@@ -1717,21 +1717,25 @@ function toggleSatViewer() {
   const btn = document.getElementById('tbtn-sat-viewer');
   panel.classList.toggle('open', satViewerOpen);
   btn.classList.toggle('active', satViewerOpen);
-  if (satViewerOpen && !satViewerDate) initSatViewerDate();
+  if (satViewerOpen) {
+    if (!satViewerDate) initSatViewerDate();
+    // Auto-fetch on first open
+    if (!satViewerImageData) fetchSatImage();
+  }
 }
 
 function selectSatDataset(el, ds) {
   document.querySelectorAll('.svp-ds').forEach(b => b.classList.remove('active'));
   el.classList.add('active');
   satViewerDataset = ds;
-  // Clear current preview if dataset changes
   satViewerImageData = null;
   document.getElementById('svp-preview-img').style.display = 'none';
-  document.getElementById('svp-preview-placeholder').style.display = 'flex';
-  document.getElementById('svp-preview-placeholder').style.flexDirection = 'column';
-  document.getElementById('svp-preview-placeholder').style.alignItems = 'center';
+  document.getElementById('svp-preview-placeholder').style.display = 'block';
   document.getElementById('svp-meta').style.display = 'none';
+  document.getElementById('svp-error').style.display = 'none';
   document.getElementById('svp-overlay-btn').disabled = true;
+  // Auto-fetch new dataset
+  fetchSatImage();
 }
 
 function shiftSatDate(delta) {
