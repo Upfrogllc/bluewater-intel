@@ -17,7 +17,7 @@ exports.handler = async (event) => {
     return { statusCode: 400, headers, body: JSON.stringify({ error: 'Invalid JSON' }) };
   }
 
-  const { dataset, date, south, north, west, east, width = 900, height = 600 } = body;
+  const { dataset, date, south, north, west, east, width = 600, height = 400 } = body;
   if (!dataset || !date) return { statusCode: 400, headers, body: JSON.stringify({ error: 'dataset and date required' }) };
 
   const DATASETS = {
@@ -71,6 +71,12 @@ exports.handler = async (event) => {
 
       const buf = await res.arrayBuffer();
       if (buf.byteLength < 5000) continue; // Too small = likely error image
+
+      // Netlify has a 6MB response limit — reject if image is too large
+      if (buf.byteLength > 4 * 1024 * 1024) {
+        console.warn(`Image too large: ${buf.byteLength} bytes for ${dataset}`);
+        continue; // Try next date (different time = different extent)
+      }
 
       const base64 = Buffer.from(buf).toString('base64');
       
