@@ -1699,9 +1699,90 @@ const SAT_DATASETS = {
 
 let satViewerOpen = false;
 let satViewerDataset = 'noaa20_sst';
-let satViewerDate = null;     // ISO date string
-let satViewerImageData = null; // { image, date, label, bbox }
-let satViewerOverlay = null;  // Leaflet ImageOverlay
+let satViewerDate = null;
+let satViewerImageData = null; // full response including raw grid
+let satViewerOverlay = null;
+
+// ── Client-side PNG renderer — mirrors server palette logic ───────
+function renderSatGrid(raw, type, ranges) {
+  if (!raw?.lats?.length || !raw?.lngs?.length) return null;
+  const { lats, lngs, values } = raw;
+  const H = lats.length, W = lngs.length;
+
+  function lerp(a, b, t) { return a + (b - a) * t; }
+  function applyPalette(stops, t) {
+    t = Math.max(0, Math.min(1, t));
+    for (let i = 0; i < stops.length - 1; i++) {
+      if (t <= stops[i+1][0]) {
+        const f = (t - stops[i][0]) / (stops[i+1][0] - stops[i][0]);
+        return stops[i][1].map((c, j) => Math.round(lerp(c, stops[i+1][1][j], f)));
+      }
+    }
+    return stops[stops.length-1][1];
+  }
+
+  const SST_STOPS = [[0,[0,0,160]],[0.18,[0,80,220]],[0.35,[0,180,200]],[0.50,[0,220,80]],[0.65,[200,230,0]],[0.80,[255,160,0]],[1,[255,20,20]]];
+  const CHL_STOPS = [[0,[68,1,84]],[0.20,[59,82,139]],[0.40,[33,145,140]],[0.60,[94,201,98]],[0.80,[253,231,37]],[1,[255,140,0]]];
+
+  const minVal = ranges?.min ?? (type === 'sst' ? 20 : 0.01);
+  const maxVal = ranges?.max ?? (type === 'sst' ? 34 : 20);
+  const gamma  = ranges?.gamma ?? 1.0;
+
+  function getColor(val) {
+    if (val == null) return null;
+    let t;
+    if (type === 'sst') {
+      t = (val - minVal) / (maxVal - minVal);
+    } else {
+      if (val <= 0) return null;
+      const logMin = Math.log10(Math.max(minVal, 0.001));
+      const logMax = Math.log10(Math.max(maxVal, 0.002));
+      t = (Math.log10(Math.max(val, 0.001)) - logMin) / (logMax - logMin);
+    }
+    t = Math.pow(Math.max(0, Math.min(1, t)), 1 / Math.max(gamma, 0.1));
+    return applyPalette(type === 'sst' ? SST_STOPS : CHL_STOPS, t);
+  }
+
+  const canvas = document.createElement('canvas');
+  canvas.width = W; canvas.height = H;
+  const ctx = canvas.getContext('2d');
+  const imgData = ctx.createImageData(W, H);
+
+  for (let row = 0; row < H; row++) {
+    const vals = values[H - 1 - row]; // flip Y — north at top
+    for (let col = 0; col < W; col++) {
+      const idx = (row * W + col) * 4;
+      const rgb = getColor(vals?.[col]);
+      if (!rgb) { imgData.data[idx+3] = 0; continue; }
+      [imgData.data[idx], imgData.data[idx+1], imgData.data[idx+2]] = rgb;
+      imgData.data[idx+3] = 210;
+    }
+  }
+  ctx.putImageData(imgData, 0, 0);
+  return canvas.toDataURL('image/png');
+}
+
+// ── Re-render sat viewer overlay when CHL/SST sliders change ─────
+function updateSatViewerFromSliders() {
+  if (!satViewerOverlay || !satViewerImageData?.raw) return;
+  const type = satViewerImageData.type;
+  let ranges;
+  if (type === 'chl') {
+    ranges = {
+      min: parseFloat(document.getElementById('chl-min-val')?.value || 0.01),
+      max: parseFloat(document.getElementById('chl-max-val')?.value || 20),
+      gamma: parseFloat(document.getElementById('chl-gamma')?.value || 1),
+    };
+  } else if (type === 'sst') {
+    ranges = {
+      min: parseFloat(document.getElementById('sst-min')?.value || 20),
+      max: parseFloat(document.getElementById('sst-max')?.value || 34),
+      gamma: parseFloat(document.getElementById('sst-gamma')?.value || 1),
+    };
+  }
+  const dataUrl = renderSatGrid(satViewerImageData.raw, type, ranges);
+  if (dataUrl) satViewerOverlay.setUrl(dataUrl);
+}
 
 function initSatViewerDate() {
   // Default to yesterday (NRT lag)
@@ -1795,7 +1876,11 @@ async function fetchSatImage() {
 
     if (!res.ok) {
       const e = await res.json().catch(() => ({}));
-      document.getElementById('svp-error').textContent = e.error || `Error ${res.status} — try a different date or dataset`;
+      const msg = res.status === 404
+        ? `No data for ${SAT_DATASETS[satViewerDataset]?.label || satViewerDataset} on ${satViewerDate} — try a different date or dataset`
+        : res.status === 405 ? 'sat-tiles function not deployed yet'
+        : e.error || `Error ${res.status}`;
+      document.getElementById('svp-error').textContent = msg;
       document.getElementById('svp-error').style.display = 'block';
       return;
     }
@@ -1829,23 +1914,33 @@ function overlayOnMap() {
   const bounds = [[d.bbox.south, d.bbox.west], [d.bbox.north, d.bbox.east]];
   const opacity = parseFloat(document.getElementById('svp-opacity').value);
 
+  // Render with current slider settings
+  let dataUrl = d.image; // fallback to server-rendered
+  if (d.raw) {
+    const type = d.type;
+    const ranges = type === 'chl' ? {
+      min: parseFloat(document.getElementById('chl-min-val')?.value || 0.01),
+      max: parseFloat(document.getElementById('chl-max-val')?.value || 20),
+      gamma: parseFloat(document.getElementById('chl-gamma')?.value || 1),
+    } : {
+      min: (parseFloat(document.getElementById('sst-min')?.value || 72) - 32) * 5/9,
+      max: (parseFloat(document.getElementById('sst-max')?.value || 88) - 32) * 5/9,
+      gamma: parseFloat(document.getElementById('sst-gamma')?.value || 1),
+    };
+    dataUrl = renderSatGrid(d.raw, type, ranges) || d.image;
+  }
+
   if (satViewerOverlay) {
-    satViewerOverlay.setUrl(d.image);
+    satViewerOverlay.setUrl(dataUrl);
     satViewerOverlay.setBounds(bounds);
     satViewerOverlay.setOpacity(opacity);
   } else {
-    satViewerOverlay = L.imageOverlay(d.image, bounds, {
-      opacity,
-      pane: 'satPane',
-      interactive: false,
-      zIndex: 300,
+    satViewerOverlay = L.imageOverlay(dataUrl, bounds, {
+      opacity, pane: 'satPane', interactive: false, zIndex: 300,
     }).addTo(map);
   }
 
-  // Fit map to image bounds
   map.fitBounds(bounds, { padding: [20, 20] });
-
-  // Show opacity control
   document.getElementById('svp-opacity-row').style.display = 'block';
 }
 
@@ -2377,6 +2472,7 @@ function onChlChange(){
   document.getElementById('chl-alpha-q').value = satRanges.chl.alpha;
   document.getElementById('chl-alpha-q-lbl').textContent = Math.round(satRanges.chl.alpha*100)+'%';
   drawSatellite();
+  updateSatViewerFromSliders(); // update sat viewer overlay if active
 }
 
 function resetChl(){
@@ -2403,6 +2499,7 @@ function onSstChange(){
   document.getElementById('sst-alpha-q').value = satRanges.sst.alpha;
   document.getElementById('sst-alpha-q-lbl').textContent = Math.round(satRanges.sst.alpha*100)+'%';
   drawSatellite();
+  updateSatViewerFromSliders(); // update sat viewer overlay if active
 }
 function resetSst(){
   document.getElementById('sst-min').value  ='72';
