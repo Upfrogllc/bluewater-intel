@@ -228,6 +228,12 @@
       const op=parseFloat((document.getElementById('bwg-op')||{}).value||0.85);
       if(galleryOverlay){galleryOverlay.setUrl(dataUrl);galleryOverlay.setBounds(bounds);galleryOverlay.setOpacity(op);}
       else { galleryOverlay=L.imageOverlay(dataUrl,bounds,{opacity:op,pane:'satPane',interactive:false}).addTo(m); }
+      // Expose the REAL temperature grid so the eddy/front detector can read actual °F (not image pixels)
+      try{
+        window.__bwData = window.__bwData || {};
+        window.__bwData.sst = { grid:j.grid, nLat:j.nLat, nLon:j.nLon, bounds:j.bounds, sensor:p.sensor, time:p.time_start };
+        if (typeof window.__bwRedetectEddies === 'function') window.__bwRedetectEddies();
+      }catch(e){}
       // keep the user's current view (do NOT fitBounds) so it loads sharp where they're looking
       const tp=j.sst?(' · '+Math.round(cToF(j.sst.min_c))+'–'+Math.round(cToF(j.sst.max_c))+'°F'):'';
       const resTxt=vb.stride===1?' · full res':' · '+(vb.stride*2)+'km';
