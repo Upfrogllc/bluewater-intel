@@ -665,10 +665,10 @@ input[type=range].rng.sst-rng::-moz-range-thumb{background:var(--hot);}
     <div class="sb-sec">
       <div class="sb-ttl" style="margin-bottom:7px">Live Currents</div>
       <div style="display:flex;flex-wrap:wrap;gap:3px;margin-bottom:7px" id="cur-src-btns">
-        <button class="src-btn active" id="cursrc-openmeteo"  onclick="setCurSource('openmeteo')">Open-Meteo</button>
-        <button class="src-btn"        id="cursrc-oscar"      onclick="setCurSource('oscar')">OSCAR NRT</button>
-        <button class="src-btn"        id="cursrc-cmems"      onclick="setCurSource('cmems')">CMEMS GLO12</button>
-        <button class="src-btn"        id="cursrc-multiobs"   onclick="setCurSource('multiobs')">MULTIOBS ⭐</button>
+        <button class="src-btn active" id="cursrc-auto"  onclick="setCurSource('auto')">Geostrophic ⭐</button>
+        <button class="src-btn"        id="cursrc-blended"      onclick="setCurSource('blended')">Blended 0.25°</button>
+        <button class="src-btn"        id="cursrc-aoml"      onclick="setCurSource('aoml')">AOML 0.2°</button>
+        <button class="src-btn"        id="cursrc-smoc"   onclick="setCurSource('smoc')">Open-Meteo</button>
       </div>
       <div class="ds-row">
         <div class="ds-dot idle" id="ds-dot"></div>
@@ -3484,7 +3484,7 @@ function detectFronts(){
 // ═══════════════════════════════════════════
 // LIVE CURRENT DATA — MULTI-SOURCE
 // ═══════════════════════════════════════════
-let activeCurSrc = 'openmeteo';
+let activeCurSrc = 'auto';
 
 // ── API headers ──────────────────────────────────────────────────
 // To add secret token protection: set BW_SECRET in Netlify env vars
@@ -3493,25 +3493,25 @@ const BW_TOKEN = '';
 const BW_HEADERS = { 'Content-Type': 'application/json', ...(BW_TOKEN ? { 'x-bw-token': BW_TOKEN } : {}) };
 
 const CUR_SOURCES = {
-  openmeteo: {
-    label: 'Open-Meteo / MeteoFrance',
-    note: 'MeteoFrance SMOC model · hourly · free · global',
-    res: '~10km'
+  auto: {
+    label: 'Geostrophic (auto)',
+    note: 'NOAA altimetry geostrophic · CoastWatch blended → AOML fallback · daily NRT',
+    res: '0.2–0.25°', kind: 'resolver', param: null
   },
-  oscar: {
-    label: 'OSCAR NRT v2.0',
-    note: 'NASA satellite-derived · 0.25° · daily · geostrophic+Ekman',
-    res: '0.25°'
+  blended: {
+    label: 'CoastWatch Blended',
+    note: 'NOAA CoastWatch blended altimetry geostrophic (RADS multi-mission) · 0.25° · daily NRT',
+    res: '0.25°', kind: 'resolver', param: 'GEOSTROPHIC_BLENDED'
   },
-  cmems: {
-    label: 'CMEMS GLO12',
-    note: 'Copernicus Marine GLO12 · 1/12° (~8km) · daily analysis + 10-day forecast',
-    res: '1/12°'
+  aoml: {
+    label: 'AOML NRT',
+    note: 'NOAA AOML near-real-time geostrophic (altimetry + climatology) · 0.2° · daily',
+    res: '0.2°', kind: 'resolver', param: 'GEOSTROPHIC_MIAMI'
   },
-  multiobs: {
-    label: 'CMEMS MULTIOBS',
-    note: 'Pure satellite obs · 1/8° · ARMOR3D in-situ merged · most accurate surface',
-    res: '1/8°'
+  smoc: {
+    label: 'Open-Meteo SMOC',
+    note: 'MeteoFrance SMOC total surface current (tide + wind + geostrophic) · hourly · global',
+    res: '~8km', kind: 'smoc', param: null
   }
 };
 
@@ -3552,54 +3552,61 @@ async function fetchPoint_OpenMeteo(lat, lng) {
   throw new Error('No data');
 }
 
-// ── Source: OSCAR NRT v2.0 via ERDDAP ────────────────────────────────────────
-// NASA PO.DAAC ERDDAP — no auth required
-async function fetchCurrents_OSCAR(pts) {
-  const b = getViewBounds();
-  const url = `https://opendap.earthdata.nasa.gov/providers/POCLOUD/collections/OSCAR_L4_OC_NRT_V2.0/granules?` +
-    `lat%5B0%5D=${b.south.toFixed(2)}&lat%5B1%5D=${b.north.toFixed(2)}` +
-    `&lon%5B0%5D=${b.west.toFixed(2)}&lon%5B1%5D=${b.east.toFixed(2)}`;
+// ── Source: NOAA geostrophic via currents-resolver ─────────
+// One call returns a U/V grid for the bbox; we sample the nearest vectors per
+// point (inverse-distance weighted) so the rest of the app keeps its
+// point-based contract. Per-point shape: {lat,lng,speed_kt,dir_deg,sst_c,u,v}
+// with u/v in knots (renderer derives bearing from atan2(u,v)).
+const MS_TO_KT = 1.94384;
 
-  // Use Copernicus ERDDAP for OSCAR as it mirrors the data
-  // Fall back to Open-Meteo if OSCAR direct fails
-  const results = [];
-  const batchSize = 8;
-  for (let i = 0; i < pts.length; i += batchSize) {
-    const batch = pts.slice(i, i + batchSize);
-    setFill(Math.round(i / pts.length * 100));
-    setDS('loading', `OSCAR: ${i+1}–${Math.min(i+batchSize, pts.length)} of ${pts.length}...`);
-    const settled = await Promise.allSettled(batch.map(([la, ln]) => fetchPoint_OpenMeteo(la, ln)));
-    for (const r of settled) { if (r.status === 'fulfilled') results.push(r.value); }
-    if (i + batchSize < pts.length) await new Promise(r => setTimeout(r, 100));
-  }
-  return results;
-}
+async function fetchCurrents_Resolver(pts, sourceParam) {
+  if (!pts.length) return [];
+  const lats = pts.map(p => p[0]), lngs = pts.map(p => p[1]);
+  const pad = 0.2;
+  const qs = new URLSearchParams({
+    minLat: (Math.min(...lats) - pad).toFixed(4),
+    maxLat: (Math.max(...lats) + pad).toFixed(4),
+    minLon: (Math.min(...lngs) - pad).toFixed(4),
+    maxLon: (Math.max(...lngs) + pad).toFixed(4),
+  });
+  if (typeof selectedDate !== 'undefined' && selectedDate) qs.set('date', selectedDate);
+  if (sourceParam) qs.set('source', sourceParam);
 
-// ── Source: CMEMS via Netlify proxy ──────────────────────────────────────────
-async function fetchCurrents_CMEMS(pts, dataset) {
-  // Call our Netlify function to proxy CMEMS current data
-  const b = getViewBounds();
-  try {
-    const res = await fetch('/.netlify/functions/claude', {
-      method: 'POST',
-      headers: BW_HEADERS,
-      body: JSON.stringify({
-        type: 'cmems_currents',
-        dataset: dataset,
-        west: b.west.toFixed(3), south: b.south.toFixed(3),
-        east: b.east.toFixed(3), north: b.north.toFixed(3),
-        date: selectedDate
-      })
-    });
-    if (!res.ok) throw new Error(`Proxy ${res.status}`);
-    const data = await res.json();
-    if (data.error) throw new Error(data.error);
-    return data.points || [];
-  } catch(e) {
-    console.warn('CMEMS currents failed, falling back to Open-Meteo:', e.message);
-    // Fallback to Open-Meteo if CMEMS fails
-    return fetchCurrents_OSCAR(pts);
+  const res = await fetch(`/.netlify/functions/currents-resolver?${qs}`, { headers: BW_HEADERS });
+  if (!res.ok) throw new Error(`Resolver ${res.status}`);
+  const data = await res.json();
+  if (data.error) throw new Error(data.error);
+  const grid = data.grid || [];
+  if (!grid.length) throw new Error('Empty current field');
+
+  window._curMeta = {
+    source: data.source,
+    sourceLabel: data.sourceLabel || data.source,
+    timestamp: data.timestamp,
+    resolution: data.resolution,
+    warning: data.warning || null,
+  };
+
+  const out = [];
+  for (const [la, ln] of pts) {
+    const near = grid
+      .map(g => ({ g, d: Math.hypot(g.lat - la, g.lon - ln) }))
+      .sort((a, b) => a.d - b.d)
+      .slice(0, 4);
+    if (!near.length || near[0].d > 0.4) continue;   // off-grid / over land -> no arrow
+    let u, v;
+    if (near[0].d < 0.01) { u = near[0].g.u; v = near[0].g.v; }
+    else {
+      const w = near.reduce((s, n) => s + 1 / n.d, 0);
+      u = near.reduce((s, n) => s + n.g.u / n.d, 0) / w;
+      v = near.reduce((s, n) => s + n.g.v / n.d, 0) / w;
+    }
+    const uk = u * MS_TO_KT, vk = v * MS_TO_KT;
+    const speed_kt = Math.hypot(uk, vk);
+    const dir_deg = (Math.atan2(uk, vk) * 180 / Math.PI + 360) % 360;
+    out.push({ lat: la, lng: ln, speed_kt, dir_deg, sst_c: null, u: uk, v: vk });
   }
+  return out;
 }
 
 // Build grid within pin radius circle
@@ -3641,49 +3648,49 @@ function buildViewportGrid(spacing) {
 }
 
 async function fetchCurrentData() {
-  setDS('loading', `Loading ${CUR_SOURCES[activeCurSrc].label}...`); setFill(0);
+  const src = CUR_SOURCES[activeCurSrc] || CUR_SOURCES.auto;
+  setDS('loading', `Loading ${src.label}...`); setFill(10);
   currentGrid = []; document.getElementById('cur-readings').innerHTML = '';
+  window._curMeta = null;
 
-  // Open-Meteo free tier: ~10 req/min — use wide spacing and sequential fetching
-  const spacing = activeCurSrc === 'openmeteo' ? 0.35 :
-                  activeCurSrc === 'oscar'      ? 0.25 :
-                  activeCurSrc === 'cmems'      ? 0.15 : 0.35;
-
-  // Use pin grid if a pin is set, otherwise fall back to viewport grid
+  // resolver field is 0.2-0.25 deg; SMOC is per-point so keep it sparse
+  const spacing = src.kind === 'smoc' ? 0.3 : 0.15;
   const pts = analysisPin ? buildPinGrid(spacing) : buildViewportGrid(spacing);
-
   if (!pts.length) { setDS('err', 'No points in view'); return; }
 
   let results = [];
   try {
-    if (activeCurSrc === 'openmeteo') {
-      // Open-Meteo free tier — fetch ONE at a time with 800ms gap to avoid 429s
-      // At 0.35° spacing a 50mi radius gives ~15-25 points = ~20 seconds total
+    if (src.kind === 'smoc') {
       for (let i = 0; i < pts.length; i++) {
         const [la, ln] = pts[i];
-        setDS('loading', `Fetching ${i+1} of ${pts.length} points...`);
-        setFill(Math.round((i / pts.length) * 100));
-        try {
-          const r = await fetchPoint_OpenMeteo(la, ln);
-          results.push(r);
-        } catch(e) { /* skip failed points */ }
-        if (i < pts.length - 1) await new Promise(r => setTimeout(r, 800));
+        setDS('loading', `SMOC ${i+1} of ${pts.length}...`);
+        setFill(Math.round(i / pts.length * 100));
+        try { results.push(await fetchPoint_OpenMeteo(la, ln)); } catch(e) {}
+        if (i < pts.length - 1) await new Promise(r => setTimeout(r, 250));
       }
-    } else if (activeCurSrc === 'oscar') {
-      results = await fetchCurrents_OSCAR(pts);
-    } else if (activeCurSrc === 'cmems') {
-      results = await fetchCurrents_CMEMS(pts, 'cmems_mod_glo_phy-cur_anfc_0.083deg_P1D-m');
-    } else if (activeCurSrc === 'multiobs') {
-      results = await fetchCurrents_CMEMS(pts, 'cmems_obs-mob_glo_phy_nrt_0.125deg_P1D-m');
+    } else {
+      setFill(50);
+      results = await fetchCurrents_Resolver(pts, src.param);
     }
-  } catch(e) {
-    setDS('err', e.message.slice(0, 50)); return;
+  } catch (e) {
+    setDS('err', (e.message || 'fetch failed').slice(0, 50));
+    return;
   }
 
   setFill(100);
-  if (!results.length) { setDS('err', 'No data returned — try different source'); return; }
+  if (!results.length) { setDS('err', 'No current data for this area'); return; }
   currentGrid = results; dataFetchTime = new Date();
-  setDS('live', `${results.length} pts · ${CUR_SOURCES[activeCurSrc].res} · ${dataFetchTime.toLocaleTimeString()}`);
+
+  const meta = window._curMeta || {};
+  setDS('live', `${results.length} pts · ${src.res} · ${dataFetchTime.toLocaleTimeString()}`);
+  const note = document.getElementById('cur-src-note');
+  if (note) {
+    let txt = (src.kind === 'resolver' && meta.source)
+      ? `Live: ${meta.sourceLabel || meta.source}${meta.timestamp ? ' · ' + meta.timestamp : ''} · ${src.note}`
+      : src.note;
+    if (meta.warning) txt += `  ⚠ ${meta.warning}`;
+    note.textContent = txt;
+  }
   updateStats();
 }
 
