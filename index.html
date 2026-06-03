@@ -1472,6 +1472,14 @@ function animateCurrents() {
   requestAnimationFrame(frame);
 }
 
+// Speed -> spectrum color [r,g,b]. pos in [0,1]: blue->cyan->green->yellow->orange->red.
+function speedColorRGB(pos){
+  const stops=[[0,[43,108,255]],[0.2,[0,207,229]],[0.4,[31,216,107]],[0.6,[255,210,63]],[0.8,[255,140,26]],[1,[255,45,45]]];
+  if(pos<=0)return stops[0][1]; if(pos>=1)return stops[stops.length-1][1];
+  for(let i=1;i<stops.length;i++){ if(pos<=stops[i][0]){ const p0=stops[i-1][0],c0=stops[i-1][1],p1=stops[i][0],c1=stops[i][1],t=(pos-p0)/(p1-p0);
+    return [Math.round(c0[0]+(c1[0]-c0[0])*t),Math.round(c0[1]+(c1[1]-c0[1])*t),Math.round(c0[2]+(c1[2]-c0[2])*t)]; } }
+  return stops[stops.length-1][1];
+}
 function drawCurrentOverlay() {
   if (!map || !currentCanvas || !currentCtx) return;
   const W = currentCanvas.width, H = currentCanvas.height;
@@ -1485,20 +1493,21 @@ function drawCurrentOverlay() {
         const lat = latlng.lat, lng = latlng.lng;
         const cur = interpCurrentAt(lat, lng);
         if (!cur || cur.speed_kt < 0.01) continue;
-        const s   = Math.min(1, cur.speed_kt / 2.0);
-        const len = Math.min(22, 5 + cur.speed_kt * 8);
+        const kt = cur.speed_kt;
+        const _cr = (window.__bwCurRange && isFinite(window.__bwCurRange.minKt)) ? window.__bwCurRange : { minKt: 0.10, maxKt: 3.00 };
+        if (kt < _cr.minKt) continue;                        // range filter: hide slack water
+        let pos = (_cr.maxKt > _cr.minKt) ? (kt - _cr.minKt) / (_cr.maxKt - _cr.minKt) : 1;
+        if (pos < 0) pos = 0; if (pos > 1) pos = 1;           // clamp above max to top color
+        const _rgb = speedColorRGB(pos);
+        const len = 16;                                       // FIXED length — color carries speed now
         const ar  = cur.dir_deg * Math.PI / 180;
         const dx  = Math.sin(ar) * len;
         const dy  = -Math.cos(ar) * len;
         const phase = (animT * 0.6 + lat * 4.1 + lng * 3.3) % 1;
         const ox = dx * phase * 0.25;
         const oy = dy * phase * 0.25;
-        const r  = Math.round(40  + s * 215);
-        const g2 = Math.round(160 + s * 95);
-        const bl = Math.round(255);
-        const alpha = 0.45 + s * 0.5;
-        const col = `rgba(${r},${g2},${bl},${alpha})`;
-        const lw  = 0.8 + s * 1.0;
+        const col = `rgba(${_rgb[0]},${_rgb[1]},${_rgb[2]},0.95)`;
+        const lw  = 1.7;
         currentCtx.strokeStyle = col;
         currentCtx.lineWidth   = lw;
         currentCtx.lineCap     = 'round';
@@ -1507,7 +1516,7 @@ function drawCurrentOverlay() {
         currentCtx.lineTo(x + ox + dx, y + oy + dy);
         currentCtx.stroke();
         const ha  = Math.atan2(-dy, -dx);
-        const hl  = 4 + s * 3;
+        const hl  = 5;
         const tx  = x + ox + dx;
         const ty  = y + oy + dy;
         currentCtx.beginPath();
