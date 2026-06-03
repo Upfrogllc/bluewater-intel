@@ -1,105 +1,112 @@
-// sat-pass.js — Netlify function (STEP 1: auth + structure probe)
+// sat-pass.js — Netlify function
+// Per-overpass SST from NASA ACSPO VIIRS L3U granules, subset to a box.
 //
-// Auth, in priority order:
-//   1) A direct Earthdata bearer token in env (NASA_EARTHDATA_TOKEN etc.) — preferred.
-//   2) NASA_EARTHDATA_USER / NASA_EARTHDATA_PASS, exchanged for a token at runtime
-//      (reuses an existing valid token; creates one only if needed).
+// Auth: NASA_EARTHDATA_TOKEN (bearer) preferred; falls back to
+//       NASA_EARTHDATA_USER/PASS only if &allowpass=1 (avoids lockouts).
 //
-// Then it finds the most recent NOAA-20 SST overpass over the box (CMR, no auth)
-// and asks NASA OPeNDAP for that granule's DAP4 metadata (.dmr) so we learn the
-// exact variable + lat/lon grid layout before writing the subset/render step.
+// Modes:
+//   (default) probe=data : find latest pass over the box, subset + decode SST,
+//                          report clarity %, temp stats, and a small preview.
+//   ?diagnose=1          : structural probe (DMR + coord order).
 //
-// Deploy, then open:  /.netlify/functions/sat-pass?diagnose=1&sample=1
-// Never returns the password or token value — only var names, statuses, the
-// token's expiry, and the file structure.
+// Grid facts confirmed from the DMR (global 0.02°):
+//   lat[0]=+89.99 -> lat[8999]=-89.99  (north->south)
+//   lon[0]=-179.99 -> lon[17999]=+179.99 (west->east)
+//   sea_surface_temperature: Int16, K = raw*0.01 + 273.15, fill = -32768
 
 const CMR = 'https://cmr.earthdata.nasa.gov/search/granules.json';
 const EDL = 'https://urs.earthdata.nasa.gov';
 
+const NLAT = 9000, NLON = 18000, DEG = 0.02, LAT0 = 89.99, LON0 = -179.99;
+const SCALE = 0.009999999776, OFFSET = 273.1499939, FILL = -32768; // K = raw*SCALE+OFFSET
+
 let _tokCache = null;
 
 exports.handler = async (event) => {
-  const headers = {
-    'Access-Control-Allow-Origin': '*',
-    'Content-Type': 'application/json',
-    'Access-Control-Allow-Headers': 'Content-Type, x-bw-token',
-  };
+  const headers = { 'Access-Control-Allow-Origin': '*', 'Content-Type': 'application/json', 'Access-Control-Allow-Headers': 'Content-Type, x-bw-token' };
   if (event.httpMethod === 'OPTIONS') return { statusCode: 204, headers, body: '' };
-  const done = (code, body) => ({ statusCode: code, headers, body: JSON.stringify(body, null, 2) });
+  const done = (c, b) => ({ statusCode: c, headers, body: JSON.stringify(b, null, 2) });
 
   const p = event.queryStringParameters || {};
   const short_name = p.short_name || 'VIIRS_N20-STAR-L3U-v2.80';
   const hours = Math.min(parseInt(p.hours || '48', 10) || 48, 336);
   const minLat = num(p.minLat, 33.5), maxLat = num(p.maxLat, 35.5);
   const minLon = num(p.minLon, -78.0), maxLon = num(p.maxLon, -74.0);
+  const stride = Math.max(1, Math.min(parseInt(p.stride || '2', 10) || 2, 8));
   const bbox = `${minLon},${minLat},${maxLon},${maxLat}`;
   const start = new Date(Date.now() - hours * 3600 * 1000).toISOString();
 
-  const TOKEN_VARS = ['NASA_EARTHDATA_TOKEN', 'EARTHDATA_TOKEN', 'EARTHDATA_LOGIN_TOKEN', 'EDL_TOKEN', 'NASA_TOKEN'];
-  const USER_VARS = ['NASA_EARTHDATA_USER', 'EARTHDATA_USER', 'EARTHDATA_USERNAME', 'EDL_USER', 'URS_USER'];
-  const PASS_VARS = ['NASA_EARTHDATA_PASS', 'EARTHDATA_PASS', 'EARTHDATA_PASSWORD', 'EDL_PASS', 'URS_PASS'];
-  const tokenVar = (p.tokenvar ? [p.tokenvar] : []).concat(TOKEN_VARS).find(k => process.env[k]);
-  const userVar = (p.uservar ? [p.uservar] : []).concat(USER_VARS).find(k => process.env[k]);
-  const passVar = (p.passvar ? [p.passvar] : []).concat(PASS_VARS).find(k => process.env[k]);
-
-  const out = { step: 'diagnostic', version: 'probe-v3', short_name, bbox,
-    tokenVar: tokenVar || null, userVar: userVar || null, passVar: passVar || null };
+  const out = { version: 'pass-v4', short_name, bbox, stride };
 
   try {
-    // 1) most recent overpass over the box (no auth)
-    const cmrUrl = `${CMR}?short_name=${encodeURIComponent(short_name)}` +
-      `&bounding_box=${encodeURIComponent(bbox)}&temporal=${encodeURIComponent(start + ',')}` +
-      `&sort_key=-start_date&page_size=1`;
-    const cr = await fetch(cmrUrl, { headers: { Accept: 'application/json' }, signal: AbortSignal.timeout(6000) });
-    const cdata = await cr.json();
-    const g = ((cdata.feed && cdata.feed.entry) || [])[0];
-    if (!g) { out.cmr = 'no granules in window'; return done(200, out); }
-    out.granule = { name: g.producer_granule_id, time_start: g.time_start, boxes: g.boxes };
-    const opendap = (g.links || []).find(l => /opendap/i.test(l.href || '') && /service#/.test(l.rel || ''));
-    if (!opendap) { out.opendap = 'no OPeNDAP link'; return done(200, out); }
-    out.opendap_base = opendap.href;
-
-    // 2) get a bearer token (direct env token preferred, else user/pass exchange)
+    // token
     let token;
-    try {
-      if (tokenVar) { token = process.env[tokenVar]; out.token = { source: `env:${tokenVar}` }; }
-      else if (userVar && passVar && p.allowpass === '1') { token = await getToken(process.env[userVar], process.env[passVar], out); }
-      else if (userVar && passVar) { out.note = 'Password login disabled to avoid lockout. Add NASA_EARTHDATA_TOKEN, or append &allowpass=1 to use stored credentials.'; return done(200, out); }
-      else { out.note = 'No token or user/pass env vars found.'; return done(200, out); }
-    } catch (e) { out.token_error = String(e.message || e); return done(200, out); }
-
+    try { token = await resolveToken(p, out); }
+    catch (e) { out.token_error = String(e.message || e); return done(200, out); }
+    if (!token) { out.note = 'No token. Set NASA_EARTHDATA_TOKEN (or &allowpass=1 with user/pass).'; return done(200, out); }
     const auth = { Authorization: `Bearer ${token}` };
 
-    // 3) DAP4 metadata for this granule — reveals variable + grid layout
-    const dmrUrl = `${opendap.href}.dmr`;
-    const d = await fetch(dmrUrl, { headers: auth, redirect: 'follow', signal: AbortSignal.timeout(8000) });
-    const dmrText = await d.text();
-    out.dmr = {
-      url: dmrUrl, status: d.status, content_type: d.headers.get('content-type'),
-      dimensions: [...dmrText.matchAll(/<Dimension\s+name="([^"]+)"\s+size="(\d+)"/g)].map(m => ({ name: m[1], size: +m[2] })),
-      sst: varInfo(dmrText, 'sea_surface_temperature'),
-      quality_level: varInfo(dmrText, 'quality_level'),
-      lat: varInfo(dmrText, 'lat'),
-      lon: varInfo(dmrText, 'lon'),
-    };
+    // latest granule over the box
+    const g = await latestGranule(short_name, bbox, start);
+    if (!g) { out.note = 'No granules over box in window'; return done(200, out); }
+    out.granule = { name: g.name, time_start: g.time_start };
+    const opendap = g.opendap;
+    if (!opendap) { out.note = 'No OPeNDAP link'; return done(200, out); }
 
-    // 4) optional: tiny read of coordinate arrays to learn grid extent + order
-    if (p.sample === '1') {
-      // read the FIRST and LAST lat/lon values to learn grid origin, spacing, and order
-      const enc = (x) => x.replace(/\[/g, '%5B').replace(/\]/g, '%5D');
-      const asc = `${opendap.href}.ascii?` + enc('lat[0:8999:8999],lon[0:17999:17999]');
-      try {
-        const a = await fetch(asc, { headers: auth, redirect: 'follow', signal: AbortSignal.timeout(8000) });
-        out.coords_ascii = { url: asc, status: a.status, body: (await a.text()).slice(0, 600) };
-      } catch (e) { out.coords_ascii = { url: asc, error: String(e.message || e) }; }
-      if (!out.coords_ascii || out.coords_ascii.status !== 200) {
-        const ce = encodeURIComponent('/lat[0:8999:8999];/lon[0:17999:17999]');
-        const csv = `${opendap.href}.dap.csv?dap4.ce=${ce}`;
-        try {
-          const a = await fetch(csv, { headers: auth, redirect: 'follow', signal: AbortSignal.timeout(8000) });
-          out.coords_dap4 = { url: csv, status: a.status, body: (await a.text()).slice(0, 600) };
-        } catch (e) { out.coords_dap4 = { url: csv, error: String(e.message || e) }; }
+    if (p.diagnose === '1') { out.opendap = opendap; return done(200, out); }
+
+    // index window for the box (lat is north->south, so maxLat -> smaller index)
+    const iTop = clampi(Math.round((LAT0 - maxLat) / DEG), NLAT);
+    const iBot = clampi(Math.round((LAT0 - minLat) / DEG), NLAT);
+    const jL = clampi(Math.round((minLon - LON0) / DEG), NLON);
+    const jR = clampi(Math.round((maxLon - LON0) / DEG), NLON);
+    const nLat = Math.floor((iBot - iTop) / stride) + 1;
+    const nLon = Math.floor((jR - jL) / stride) + 1;
+    out.window = { iTop, iBot, jL, jR, nLat, nLon, cells: nLat * nLon };
+
+    // fetch SST subset as DAP4 CSV
+    const ce = `/sea_surface_temperature[0][${iTop}:${stride}:${iBot}][${jL}:${stride}:${jR}]`;
+    const url = `${opendap}.dap.csv?dap4.ce=${encodeURIComponent(ce)}`;
+    const r = await fetch(url, { headers: auth, redirect: 'follow', signal: AbortSignal.timeout(9000) });
+    const text = await r.text();
+    out.fetch = { status: r.status, bytes: text.length };
+    if (!r.ok) { out.fetch.body = text.slice(0, 300); return done(200, out); }
+
+    // parse: take everything after the variable name, pull integer tokens (raw Int16)
+    const k = text.indexOf('sea_surface_temperature');
+    const after = k >= 0 ? text.slice(text.indexOf(',', k) + 1) : text;
+    const raw = (after.match(/-?\d+/g) || []).map(Number);
+    out.parsed = { values: raw.length, expected: nLat * nLon };
+
+    // decode + clarity
+    let valid = 0, sum = 0, mn = Infinity, mx = -Infinity;
+    const cels = new Array(raw.length);
+    for (let n = 0; n < raw.length; n++) {
+      const v = raw[n];
+      if (v === FILL) { cels[n] = null; continue; }
+      const c = v * SCALE + OFFSET - 273.15;
+      cels[n] = c; valid++; sum += c; if (c < mn) mn = c; if (c > mx) mx = c;
+    }
+    const total = raw.length || 1;
+    out.clarity_pct = Math.round((valid / total) * 100);
+    out.sst = valid ? {
+      min_c: +mn.toFixed(2), max_c: +mx.toFixed(2), mean_c: +(sum / valid).toFixed(2),
+      mean_f: +((sum / valid) * 9 / 5 + 32).toFixed(1),
+    } : null;
+
+    // tiny preview: a coarse ASCII grid (°F rounded, '..' = cloud) — sanity check only
+    if (raw.length === nLat * nLon) {
+      const rows = [];
+      const rStep = Math.max(1, Math.floor(nLat / 8)), cStep = Math.max(1, Math.floor(nLon / 12));
+      for (let i = 0; i < nLat; i += rStep) {
+        let line = '';
+        for (let j = 0; j < nLon; j += cStep) {
+          const c = cels[i * nLon + j];
+          line += (c == null) ? ' ..' : String(Math.round(c * 9 / 5 + 32)).padStart(3, ' ');
+        }
+        rows.push(line);
       }
+      out.preview_F = rows;
     }
     return done(200, out);
   } catch (e) {
@@ -108,45 +115,33 @@ exports.handler = async (event) => {
   }
 };
 
-async function getToken(user, pass, out) {
+async function latestGranule(short_name, bbox, start) {
+  const url = `${CMR}?short_name=${encodeURIComponent(short_name)}&bounding_box=${encodeURIComponent(bbox)}` +
+    `&temporal=${encodeURIComponent(start + ',')}&sort_key=-start_date&page_size=1`;
+  const r = await fetch(url, { headers: { Accept: 'application/json' }, signal: AbortSignal.timeout(6000) });
+  const d = await r.json();
+  const g = ((d.feed && d.feed.entry) || [])[0];
+  if (!g) return null;
+  const od = (g.links || []).find(l => /opendap/i.test(l.href || '') && /service#/.test(l.rel || ''));
+  return { name: g.producer_granule_id, time_start: g.time_start, opendap: od ? od.href : null };
+}
+
+async function resolveToken(p, out) {
+  const TOKENS = ['NASA_EARTHDATA_TOKEN', 'EARTHDATA_TOKEN', 'EARTHDATA_LOGIN_TOKEN', 'EDL_TOKEN', 'NASA_TOKEN'];
+  const tv = (p.tokenvar ? [p.tokenvar] : []).concat(TOKENS).find(k => process.env[k]);
+  if (tv) { out.token = { source: `env:${tv}` }; return process.env[tv]; }
+  if (p.allowpass !== '1') return null;
+  const uv = ['NASA_EARTHDATA_USER', 'EARTHDATA_USER', 'EARTHDATA_USERNAME'].find(k => process.env[k]);
+  const pv = ['NASA_EARTHDATA_PASS', 'EARTHDATA_PASS', 'EARTHDATA_PASSWORD'].find(k => process.env[k]);
+  if (!uv || !pv) return null;
   const now = Date.now();
-  if (_tokCache && new Date(_tokCache.expiration_date).getTime() > now + 86400000) {
-    out.token = { source: 'cache', expires: _tokCache.expiration_date };
-    return _tokCache.access_token;
-  }
-  const basic = 'Basic ' + Buffer.from(`${user}:${pass}`).toString('base64');
-  try {
-    const r = await fetch(`${EDL}/api/users/tokens`, { headers: { Authorization: basic }, signal: AbortSignal.timeout(6000) });
-    if (r.ok) {
-      const list = await r.json();
-      const valid = Array.isArray(list) && list.find(t => t.access_token && new Date(t.expiration_date).getTime() > now + 86400000);
-      if (valid) { _tokCache = valid; out.token = { source: 'reused', expires: valid.expiration_date }; return valid.access_token; }
-    } else { out.token_list_status = r.status; }
-  } catch (e) { out.token_list_error = String(e.message || e); }
-
+  if (_tokCache && new Date(_tokCache.expiration_date).getTime() > now + 86400000) { out.token = { source: 'cache' }; return _tokCache.access_token; }
+  const basic = 'Basic ' + Buffer.from(`${process.env[uv]}:${process.env[pv]}`).toString('base64');
   const c = await fetch(`${EDL}/api/users/token`, { method: 'POST', headers: { Authorization: basic }, signal: AbortSignal.timeout(6000) });
-  const ctext = await c.text();
-  if (!c.ok) throw new Error(`token create ${c.status}: ${ctext.slice(0, 200)}`);
-  const tok = JSON.parse(ctext);
-  _tokCache = tok;
-  out.token = { source: 'created', expires: tok.expiration_date };
-  return tok.access_token;
+  const t = await c.text();
+  if (!c.ok) throw new Error(`token ${c.status}: ${t.slice(0, 150)}`);
+  _tokCache = JSON.parse(t); out.token = { source: 'created' }; return _tokCache.access_token;
 }
 
-// Pull a variable's type + key attributes out of the DAP4 DMR XML
-function varInfo(dmr, name) {
-  const m = dmr.match(new RegExp('<(Float32|Float64|Int8|Int16|Int32|Int64|Byte|UByte|UInt8|UInt16|UInt32)\\s+name="' + name + '">'));
-  if (!m) return null;
-  const type = m[1];
-  const end = dmr.indexOf('</' + type + '>', m.index);
-  const block = end > -1 ? dmr.slice(m.index, end) : dmr.slice(m.index, m.index + 2000);
-  const attrs = {};
-  for (const a of block.matchAll(/<Attribute\s+name="([^"]+)"[^>]*>\s*<Value>([^<]*)<\/Value>/g)) attrs[a[1]] = a[2];
-  const keep = ['units', 'scale_factor', 'add_offset', '_FillValue', 'valid_min', 'valid_max', 'actual_range', 'standard_name', 'flag_meanings'];
-  const picked = {};
-  for (const k of keep) if (k in attrs) picked[k] = attrs[k];
-  return { type, attrs: picked };
-}
-
+function clampi(v, n) { return Math.max(0, Math.min(n - 1, v)); }
 function num(v, d) { const n = parseFloat(v); return Number.isFinite(n) ? n : d; }
- 
