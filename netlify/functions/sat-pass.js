@@ -200,3 +200,4 @@ function clampi(v, n) { return Math.max(0, Math.min(n - 1, v)); }
 function num(v, d) { const n = parseFloat(v); return Number.isFinite(n) ? n : d; }
 function r1(x) { return Math.round(x * 10) / 10; }
 function r4(x) { return Math.round(x * 1e4) / 1e4; }
+ 
