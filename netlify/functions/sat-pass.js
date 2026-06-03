@@ -81,10 +81,18 @@ exports.handler = async (event) => {
       return done(200, out);
     }
 
-    // parse: take everything after the variable name, pull integer tokens (raw Int16)
-    const k = text.indexOf('sea_surface_temperature');
-    const after = k >= 0 ? text.slice(text.indexOf(',', k) + 1) : text;
-    const raw = (after.match(/-?\d+/g) || []).map(Number);
+    // parse: one line per lat-row, each "/sea_surface_temperature[0][i], v, v, ..."
+    // keep only values after each row's first comma (the row label holds stray ints)
+    const raw = [];
+    for (const ln of text.split('\n')) {
+      if (ln.indexOf('sea_surface_temperature') === -1) continue;
+      const c = ln.indexOf(',');
+      if (c === -1) continue;
+      for (const tok of ln.slice(c + 1).split(',')) {
+        const t = tok.trim();
+        if (t) raw.push(parseInt(t, 10));
+      }
+    }
     out.parsed = { values: raw.length, expected: nLat * nLon };
 
     // decode + clarity
