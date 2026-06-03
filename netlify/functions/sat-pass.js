@@ -72,6 +72,15 @@ exports.handler = async (event) => {
     out.fetch = { status: r.status, bytes: text.length };
     if (!r.ok) { out.fetch.body = text.slice(0, 300); return done(200, out); }
 
+    if (p.raw === '1') {
+      out.body_head = text.slice(0, 700);
+      out.body_tail = text.slice(-300);
+      const kk = text.indexOf('sea_surface_temperature');
+      out.var_segment = kk >= 0 ? text.slice(kk, kk + 120) : '(name not found)';
+      out.line_count = text.split('\n').length;
+      return done(200, out);
+    }
+
     // parse: take everything after the variable name, pull integer tokens (raw Int16)
     const k = text.indexOf('sea_surface_temperature');
     const after = k >= 0 ? text.slice(text.indexOf(',', k) + 1) : text;
