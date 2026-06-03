@@ -971,8 +971,8 @@ input[type=range].rng.sst-rng::-moz-range-thumb{background:var(--hot);}
     </div>
 
     <div id="mbadge">
-      <strong>📍 Port St. Lucie Offshore</strong>
-      Treasure Coast, FL
+      <strong>📍 Morehead City Offshore</strong>
+      Crystal Coast, NC
       <div id="mcoords">Hover for coordinates + depth</div>
     </div>
 
@@ -1010,18 +1010,17 @@ input[type=range].rng.sst-rng::-moz-range-thumb{background:var(--hot);}
         </div>
         <div id="port-config" style="display:none">
           <select id="port-select" onchange="onPortSelect()" style="width:100%;padding:5px;background:#ffffff08;border:1px solid var(--border);border-radius:4px;color:var(--text);font-family:'Space Mono';font-size:8px;margin-bottom:5px;">
-            <option value="psl">Port St. Lucie Inlet (27.17°N, 80.18°W)</option>
-            <option value="ftlaud">Ft. Lauderdale (26.08°N, 80.10°W)</option>
-            <option value="miami">Miami (25.77°N, 80.13°W)</option>
-            <option value="keys">Marathon/Keys (24.72°N, 81.00°W)</option>
-            <option value="cb">Canaveral (28.41°N, 80.59°W)</option>
-            <option value="daytona">Daytona/Ponce (29.08°N, 80.92°W)</option>
-            <option value="jax">Jacksonville (30.40°N, 81.43°W)</option>
+            <option value="beaufort">Beaufort Inlet / Morehead City (34.69°N, 76.67°W)</option>
+            <option value="hatteras">Hatteras Inlet (35.20°N, 75.74°W)</option>
+            <option value="bogue">Bogue Inlet / Swansboro (34.63°N, 77.11°W)</option>
+            <option value="newriver">New River Inlet / Topsail (34.53°N, 77.34°W)</option>
+            <option value="masonboro">Masonboro Inlet / Wrightsville (34.18°N, 77.82°W)</option>
+            <option value="capefear">Cape Fear / Wilmington (33.85°N, 77.96°W)</option>
             <option value="custom">Custom coordinates...</option>
           </select>
           <div id="custom-coords" style="display:none;margin-bottom:5px;">
-            <input id="port-lat" type="number" step="0.01" placeholder="Lat e.g. 27.17" style="width:48%;padding:4px;background:#ffffff08;border:1px solid var(--border);border-radius:4px;color:var(--text);font-family:'Space Mono';font-size:8px;">
-            <input id="port-lng" type="number" step="0.01" placeholder="Lng e.g. -80.18" style="width:48%;padding:4px;background:#ffffff08;border:1px solid var(--border);border-radius:4px;color:var(--text);font-family:'Space Mono';font-size:8px;margin-left:2px;">
+            <input id="port-lat" type="number" step="0.01" placeholder="Lat e.g. 34.72" style="width:48%;padding:4px;background:#ffffff08;border:1px solid var(--border);border-radius:4px;color:var(--text);font-family:'Space Mono';font-size:8px;">
+            <input id="port-lng" type="number" step="0.01" placeholder="Lng e.g. -76.73" style="width:48%;padding:4px;background:#ffffff08;border:1px solid var(--border);border-radius:4px;color:var(--text);font-family:'Space Mono';font-size:8px;margin-left:2px;">
           </div>
           <div style="display:flex;align-items:center;gap:6px;">
             <span style="font-family:'Space Mono';font-size:8px;color:var(--muted);white-space:nowrap">Radius</span>
@@ -1078,7 +1077,7 @@ input[type=range].rng.sst-rng::-moz-range-thumb{background:var(--hot);}
       style="width:100%;padding:13px;border-radius:8px;border:none;background:var(--teal);color:var(--deep);font-family:'Bebas Neue';font-size:18px;letter-spacing:2px;cursor:pointer;transition:all .2s">
       ENTER
     </button>
-    <div style="font-family:'Space Mono';font-size:8px;color:var(--muted);margin-top:20px">BlueWater Intel · Treasure Coast FL</div>
+    <div style="font-family:'Space Mono';font-size:8px;color:var(--muted);margin-top:20px">BlueWater Intel · Crystal Coast NC</div>
   </div>
 </div>
 
@@ -1174,8 +1173,8 @@ let measureMarkers = [];
 
 function initLeafletMap() {
   map = L.map('mapwrap', {
-    center: [27.28, -79.5],
-    zoom: 8,
+    center: [34.55, -76.0],
+    zoom: 7,
     zoomControl: false,
     attributionControl: true
   });
@@ -1267,7 +1266,7 @@ function initLeafletMap() {
 // GEO HELPERS (Leaflet-aware)
 // ═══════════════════════════════════════════
 function getViewBounds() {
-  if (!map) return {south:26.0,north:28.5,west:-81.0,east:-78.5};
+  if (!map) return {south:33.5,north:35.5,west:-78.0,east:-74.0};
   const b = map.getBounds();
   return {
     south: b.getSouth(), north: b.getNorth(),
@@ -1284,7 +1283,7 @@ function mapLatLngToContainer(lat, lng) {
 // Legacy compat (used in AI analysis, measure, spot popup)
 function geoToCanvas(lat, lng) { return mapLatLngToContainer(lat, lng); }
 function canvasToGeo(x, y) {
-  if (!map) return [27.0, -80.0];
+  if (!map) return [34.55, -76.0];
   const pt = map.containerPointToLatLng([x, y]);
   return [pt.lat, pt.lng];
 }
@@ -1849,7 +1848,7 @@ async function fetchSatImage() {
       east:  Math.min(centerLng + span * 1.2, -77),
     };
   } else {
-    bbox = { south: 25.0, north: 30.0, west: -82.0, east: -79.0 };
+    bbox = { south: 33.5, north: 35.5, west: -78.0, east: -74.0 };
   }
 
   // Show loading
@@ -1959,7 +1958,7 @@ function removeSatOverlay() {
 
 function toggleNavionics() {
   // Navionics blocks iframes — open in new tab synced to current map view
-  const center = map ? map.getCenter() : {lat: 27.17, lng: -80.18};
+  const center = map ? map.getCenter() : {lat: 34.55, lng: -76.0};
   const zoom   = map ? Math.min(map.getZoom(), 17) : 10;
   const lat    = center.lat.toFixed(5);
   const lng    = center.lng.toFixed(5);
@@ -3925,13 +3924,12 @@ function updateAnalyzeBtn(){
 // ── Search area mode (viewport vs home port radius) ──
 let searchMode = 'viewport'; // 'viewport' | 'port'
 const HOME_PORTS = {
-  psl:     { name:'Port St. Lucie Inlet',   lat:27.170, lng:-80.178 },
-  ftlaud:  { name:'Ft. Lauderdale Inlet',   lat:26.078, lng:-80.103 },
-  miami:   { name:'Miami (Haulover)',        lat:25.769, lng:-80.130 },
-  keys:    { name:'Marathon / Boot Key',     lat:24.718, lng:-81.003 },
-  cb:      { name:'Cape Canaveral',          lat:28.413, lng:-80.588 },
-  daytona: { name:'Ponce Inlet / Daytona',  lat:29.082, lng:-80.921 },
-  jax:     { name:'Jacksonville/St. Johns', lat:30.398, lng:-81.430 },
+  beaufort: { name:'Beaufort Inlet / Morehead City', lat:34.690, lng:-76.670 },
+  hatteras: { name:'Hatteras Inlet',                 lat:35.200, lng:-75.740 },
+  bogue:    { name:'Bogue Inlet / Swansboro',        lat:34.630, lng:-77.110 },
+  newriver: { name:'New River Inlet / Topsail',      lat:34.530, lng:-77.340 },
+  masonboro:{ name:'Masonboro Inlet / Wrightsville', lat:34.180, lng:-77.820 },
+  capefear: { name:'Cape Fear / Wilmington',         lat:33.850, lng:-77.960 },
 };
 
 function setSearchMode(mode){
@@ -3979,7 +3977,7 @@ function getSearchBounds(){
       clng = parseFloat(document.getElementById('port-lng').value) || -80.18;
       portName = 'Custom port';
     } else {
-      const p = HOME_PORTS[sel] || HOME_PORTS.psl;
+      const p = HOME_PORTS[sel] || HOME_PORTS.beaufort;
       clat = p.lat; clng = p.lng; portName = p.name;
     }
     const radiusMi = parseInt(document.getElementById('search-radius').value) || 80;
@@ -4198,12 +4196,12 @@ const SPECIES_PROMPT_MAP = {
 };
 
 function detectRegionFromMap() {
-  if (!analysisPin) return 'SE_FLORIDA';
+  if (!analysisPin) return 'MID_ATLANTIC';
   const lat = analysisPin.lat;
   if (lat >= 24.5 && lat < 29.5) return 'SE_FLORIDA';
   if (lat >= 29.5 && lat < 37.5) return 'MID_ATLANTIC';
   if (lat >= 37.5) return 'NORTHEAST';
-  return 'SE_FLORIDA';
+  return 'MID_ATLANTIC';
 }
 
 function getCurrentSeason() {
@@ -4346,8 +4344,8 @@ function switchTab(tab){
 // ═══════════════════════════════════════════
 let wxWeatherData = null; // cached fetch result
 
-// Fetch for Port St. Lucie offshore (~27.2°N, 80.0°W)
-const WX_LAT = 27.2, WX_LNG = -80.0;
+// Fetch for Morehead City offshore (~34.5°N, 76.0°W)
+const WX_LAT = 34.5, WX_LNG = -76.0;
 
 async function fetchWeather(){
   const body = document.getElementById('wx-body');
@@ -4537,7 +4535,7 @@ function renderWeather(){
   }
   html += `</table></div>`;
 
-  html += `<div style="font-family:'Space Mono';font-size:7px;color:var(--muted);margin-top:10px;text-align:center">Open-Meteo · ${fetched.toLocaleTimeString()} · 27.2°N 80.0°W offshore PSL<br><button onclick="fetchWeather()" style="margin-top:5px;padding:4px 10px;border-radius:3px;border:1px solid var(--border);background:transparent;color:var(--muted);font-family:'Space Mono';font-size:7px;cursor:pointer">⟳ Refresh</button></div>`;
+  html += `<div style="font-family:'Space Mono';font-size:7px;color:var(--muted);margin-top:10px;text-align:center">Open-Meteo · ${fetched.toLocaleTimeString()} · 34.5°N 76.0°W offshore Morehead City<br><button onclick="fetchWeather()" style="margin-top:5px;padding:4px 10px;border-radius:3px;border:1px solid var(--border);background:transparent;color:var(--muted);font-family:'Space Mono';font-size:7px;cursor:pointer">⟳ Refresh</button></div>`;
 
   document.getElementById('wx-body').innerHTML = html;
 
