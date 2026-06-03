@@ -47,7 +47,7 @@
   /* lightbox */
   #lb{position:fixed;inset:0;z-index:50;background:rgba(3,10,18,.93);display:none;align-items:center;justify-content:center;flex-direction:column;gap:14px;padding:24px}
   #lb.open{display:flex}
-  #lb img{max-width:92vw;max-height:78vh;border-radius:10px;border:1px solid var(--border);background:#0a1622}
+  #lb-stage canvas{max-width:92vw;max-height:78vh;border-radius:10px;border:1px solid var(--border);background:#0a1622;display:block}
   #lb .cap{font:600 14px system-ui;color:var(--text);text-align:center}
   #lb .x{position:absolute;top:18px;right:22px;font-size:22px;color:#cfe;cursor:pointer;border:1px solid rgba(255,255,255,.25);border-radius:8px;width:38px;height:38px;display:flex;align-items:center;justify-content:center}
   #lb .x:hover{border-color:#ff8;color:#ff8}
@@ -87,7 +87,7 @@
 
 <div id="grid"></div>
 
-<div id="lb"><div class="x" onclick="closeLB()">✕</div><img id="lb-img"/><div class="cap" id="lb-cap"></div></div>
+<div id="lb"><div class="x" onclick="closeLB()">✕</div><div id="lb-stage"></div><div class="cap" id="lb-cap"></div></div>
 
 <script>
 const FN='/.netlify/functions/sat-pass';
@@ -234,15 +234,15 @@ async function kickThumbs(){
 // ---- lightbox: load a finer render of the pass ----
 async function openLB(p){
   const lb=document.getElementById('lb');lb.classList.add('open');
+  const stage=document.getElementById('lb-stage');stage.innerHTML='';
   document.getElementById('lb-cap').textContent='Loading '+p.sensor+' '+fmtTime(p.time_start)+'…';
-  document.getElementById('lb-img').src='';
   try{
     const base=await new Promise(res=>{const img=new Image();img.onload=()=>res(img);img.onerror=()=>res(null);img.src=esriUrl(700);});
     const url=`${FN}?mode=tile&stride=${strideFor(360)}&g=${encodeURIComponent(p.opendap)}&${qs(boxQuery())}`;
     const r=await fetch(url);const j=await r.json();
     if(j.error||!j.grid){document.getElementById('lb-cap').textContent='No data for that pass';return;}
     const cv=composite(j,base,1);
-    document.getElementById('lb-img').src=cv.toDataURL('image/png');
+    stage.innerHTML='';stage.appendChild(cv);
     const tp=j.sst?(' · '+Math.round(cToF(j.sst.min_c))+'–'+Math.round(cToF(j.sst.max_c))+'°F'):'';
     document.getElementById('lb-cap').textContent=p.sensor+' VIIRS SST · '+fmtTime(p.time_start)+' · '+(j.clarity_pct!=null?j.clarity_pct+'% clear':'')+tp+' · '+rb().name;
   }catch(e){document.getElementById('lb-cap').textContent='Failed to load pass';}
