@@ -2952,6 +2952,12 @@ function detectEddies(){
   updateEddySidebar();
 }
 
+window.__bwRedetectEddies = function(){
+  try {
+    detectedFronts = null;
+    if (typeof layers !== 'undefined' && layers.me) { microEddies = detectMicroEddies(); updateMicroEddySidebar(); }
+  } catch(e){ console.warn('[eddy] redetect failed:', e); }
+};
 function detectMicroEddies(){
   // ═══════════════════════════════════════════════════════════════
   // HYBRID MICRO-EDDY DETECTION
@@ -3074,32 +3080,54 @@ function detectMicroEddies(){
   // Uses satellite imagery to find circular color gradient patterns.
   // Works with either CHL or SST — whichever is loaded.
   // ─────────────────────────────────────────────────────────────
-  let srcImg = null;
-  if (satLayers.chl && satCache.chl.img) srcImg = satCache.chl.img;
-  else if (satLayers.sst && satCache.sst.img) srcImg = satCache.sst.img;
- 
-  if (srcImg) {
-    // Render to offscreen canvas
-    const tmp = document.createElement('canvas');
-    tmp.width = W; tmp.height = H;
-    const tc = tmp.getContext('2d');
-    tc.drawImage(srcImg, 0, 0, W, H);
- 
-    let px;
-    try { px = tc.getImageData(0, 0, W, H).data; }
-    catch(e) { px = null; }
- 
-    if (px) {
-      // Build luminance + valid mask
-      const lum   = new Float32Array(W * H);
-      const valid = new Uint8Array(W * H);
-      for (let i = 0; i < W * H; i++) {
-        const b = i * 4;
-        if (px[b + 3] < 10) { lum[i] = 0; valid[i] = 0; continue; }
-        lum[i] = px[b] * 0.299 + px[b + 1] * 0.587 + px[b + 2] * 0.114;
-        valid[i] = 1;
+  // METHOD 2: gradient analysis — REAL SST grid preferred; satellite image is the fallback.
+  // Builds a thermal scalar field (°F) in canvas space, then runs the SAME Sobel + Hough
+  // circular-vote machinery below — so a loaded sat-pass scan votes for eddies just like an image did.
+  const _sstReal = (typeof window!=='undefined' && window.__bwData && window.__bwData.sst && window.__bwData.sst.grid) ? window.__bwData.sst : null;
+  let lum = null, valid = null, _haveField = false;
+  if (_sstReal && _sstReal.bounds && _sstReal.nLat && _sstReal.nLon) {
+    lum = new Float32Array(W * H); valid = new Uint8Array(W * H);
+    const lngByX = new Float64Array(W); for (let x = 0; x < W; x++) lngByX[x] = map.containerPointToLatLng([x, 0]).lng;
+    const latByY = new Float64Array(H); for (let y = 0; y < H; y++) latByY[y] = map.containerPointToLatLng([0, y]).lat;
+    const gb = _sstReal.bounds, gN = _sstReal.nLat, gM = _sstReal.nLon, gG = _sstReal.grid;
+    const dLat = (gb.north - gb.south) || 1e-9, dLon = (gb.east - gb.west) || 1e-9;
+    for (let y = 0; y < H; y++) {
+      const la = latByY[y];
+      for (let x = 0; x < W; x++) {
+        const i = y * W + x, lng = lngByX[x];
+        if (la > gb.north || la < gb.south || lng < gb.west || lng > gb.east) { lum[i] = 0; valid[i] = 0; continue; }
+        const row = Math.round((gb.north - la) / dLat * (gN - 1));
+        const col = Math.round((lng - gb.west) / dLon * (gM - 1));
+        const v = (row >= 0 && row < gN && col >= 0 && col < gM) ? gG[row * gM + col] : null;
+        if (v == null) { lum[i] = 0; valid[i] = 0; }
+        else { lum[i] = v * 9 / 5 + 32; valid[i] = 1; }   // °F scalar field
       }
- 
+    }
+    _haveField = true;
+  } else {
+    let srcImg = null;
+    if (satLayers.chl && satCache.chl.img) srcImg = satCache.chl.img;
+    else if (satLayers.sst && satCache.sst.img) srcImg = satCache.sst.img;
+    if (srcImg) {
+      const tmp = document.createElement('canvas'); tmp.width = W; tmp.height = H;
+      const tc = tmp.getContext('2d'); tc.drawImage(srcImg, 0, 0, W, H);
+      let px; try { px = tc.getImageData(0, 0, W, H).data; } catch (e) { px = null; }
+      if (px) {
+        lum = new Float32Array(W * H); valid = new Uint8Array(W * H);
+        for (let i = 0; i < W * H; i++) {
+          const b = i * 4;
+          if (px[b + 3] < 10) { lum[i] = 0; valid[i] = 0; continue; }
+          lum[i] = px[b] * 0.299 + px[b + 1] * 0.587 + px[b + 2] * 0.114;
+          valid[i] = 1;
+        }
+        _haveField = true;
+      }
+    }
+  }
+
+  // The two closing braces of the original if(px)/if(srcImg) now close this dummy block + if(_haveField).
+  if (_haveField) {
+    {
       // Compute Sobel gradients
       const step = 2;
       const gx = new Float32Array(W * H);
