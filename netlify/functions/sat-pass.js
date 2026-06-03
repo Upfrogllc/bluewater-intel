@@ -63,7 +63,8 @@ exports.handler = async (event) => {
     let token;
     try {
       if (tokenVar) { token = process.env[tokenVar]; out.token = { source: `env:${tokenVar}` }; }
-      else if (userVar && passVar) { token = await getToken(process.env[userVar], process.env[passVar], out); }
+      else if (userVar && passVar && p.allowpass === '1') { token = await getToken(process.env[userVar], process.env[passVar], out); }
+      else if (userVar && passVar) { out.note = 'Password login disabled to avoid lockout. Add NASA_EARTHDATA_TOKEN, or append &allowpass=1 to use stored credentials.'; return done(200, out); }
       else { out.note = 'No token or user/pass env vars found.'; return done(200, out); }
     } catch (e) { out.token_error = String(e.message || e); return done(200, out); }
 
