@@ -1,0 +1,264 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1"/>
+<title>BlueWater Intel — Satellite Imagery</title>
+<style>
+  :root{--navy:#0b2545;--bg:#061320;--panel:#0a1c2e;--teal:#16d6c3;--text:#e6f2f5;--muted:#7fa6af;--border:rgba(22,214,195,.22)}
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--text);font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif}
+  header{position:sticky;top:0;z-index:10;background:rgba(8,22,40,.97);backdrop-filter:blur(8px);
+    border-bottom:1px solid var(--border);padding:12px 18px;display:flex;align-items:center;gap:16px;flex-wrap:wrap}
+  header h1{margin:0;font-size:16px;font-weight:800;letter-spacing:.4px;color:var(--teal)}
+  header h1 span{color:var(--text);font-weight:600}
+  .ctrl{display:flex;align-items:center;gap:7px}
+  .ctrl label{font-size:11px;font-weight:700;color:var(--muted);letter-spacing:.4px}
+  select{background:#0a2030;color:#dff;border:1px solid var(--border);border-radius:8px;padding:6px 10px;font:600 12px system-ui}
+  .pill{background:rgba(255,255,255,.05);border:1px solid rgba(255,255,255,.14);color:#bcd;border-radius:999px;
+    padding:6px 13px;font:700 12px system-ui;cursor:pointer}
+  .pill:hover{border-color:rgba(22,214,195,.55);color:#dff}
+  .pill.active{background:var(--teal);border-color:var(--teal);color:#03222b}
+  .seg{display:flex;gap:6px}
+  button.act{background:transparent;border:1px solid rgba(255,255,255,.22);color:#cfe;border-radius:8px;padding:6px 11px;font:600 12px system-ui;cursor:pointer}
+  button.act:hover{border-color:var(--teal);color:var(--teal)}
+  #status{margin-left:auto;font-size:12px;color:var(--muted)}
+  #legend{display:flex;align-items:center;gap:7px;font-size:11px;color:var(--muted)}
+  #legend .ramp{width:130px;height:9px;border-radius:5px;background:linear-gradient(90deg,#001aa0,#0050dc,#00b4c8,#00dc50,#c8e600,#ffa000,#ff1414)}
+  #grid{padding:18px;display:grid;gap:15px;grid-template-columns:repeat(auto-fill,minmax(220px,1fr))}
+  .card{border:1px solid rgba(255,255,255,.1);border-radius:12px;overflow:hidden;cursor:pointer;background:rgba(255,255,255,.025);
+    transition:border-color .15s,transform .12s}
+  .card:hover{border-color:rgba(22,214,195,.6);transform:translateY(-2px)}
+  .thumb-wrap{position:relative;width:100%;background:#0a1622;display:flex;align-items:center;justify-content:center;min-height:150px}
+  .thumb{width:100%;height:auto;display:block}
+  .spin{position:absolute;font:600 11px system-ui;color:#5cc}
+  .badge{position:absolute;top:8px;left:8px;font:800 10px system-ui;padding:3px 7px;border-radius:6px;letter-spacing:.5px;z-index:2}
+  .badge.N20{background:var(--teal);color:#03222b}.badge.NPP{background:#5b8def;color:#06122a}.badge.N21{background:#c98bff;color:#1c0830}
+  .dn{position:absolute;top:7px;right:9px;font-size:14px;filter:drop-shadow(0 1px 2px #000);z-index:2}
+  .clar{position:absolute;bottom:0;left:0;right:0;height:5px;background:rgba(0,0,0,.45);z-index:2}
+  .clar>i{display:block;height:100%;background:linear-gradient(90deg,var(--teal),#9CFFC0)}
+  .info{padding:9px 11px;display:flex;flex-direction:column;gap:3px}
+  .info .t{font:700 13px system-ui}
+  .info .m{font:500 11px system-ui;color:var(--muted);display:flex;justify-content:space-between}
+  .empty{grid-column:1/-1;text-align:center;padding:70px 24px;color:var(--muted)}
+  .empty h2{color:#bcd;font-size:16px;margin:0 0 8px}
+  .empty p{max-width:520px;margin:0 auto;line-height:1.55;font-size:13px}
+  .tag{display:inline-block;font:700 11px system-ui;letter-spacing:.5px;color:var(--teal);border:1px solid var(--border);padding:4px 11px;border-radius:999px;margin-bottom:12px}
+  /* lightbox */
+  #lb{position:fixed;inset:0;z-index:50;background:rgba(3,10,18,.93);display:none;align-items:center;justify-content:center;flex-direction:column;gap:14px;padding:24px}
+  #lb.open{display:flex}
+  #lb img{max-width:92vw;max-height:78vh;border-radius:10px;border:1px solid var(--border);background:#0a1622}
+  #lb .cap{font:600 14px system-ui;color:var(--text);text-align:center}
+  #lb .x{position:absolute;top:18px;right:22px;font-size:22px;color:#cfe;cursor:pointer;border:1px solid rgba(255,255,255,.25);border-radius:8px;width:38px;height:38px;display:flex;align-items:center;justify-content:center}
+  #lb .x:hover{border-color:#ff8;color:#ff8}
+</style>
+</head>
+<body>
+<header>
+  <h1>🛰 BlueWater <span>Imagery</span></h1>
+  <div class="ctrl"><label>Product</label>
+    <div class="seg">
+      <button class="pill active" data-prod="sst">SST</button>
+      <button class="pill" data-prod="chl">Chlorophyll</button>
+    </div>
+  </div>
+  <div class="ctrl"><label>Region</label>
+    <select id="region">
+      <option value="full" selected>Full East Coast</option>
+      <option value="se">Southeast (FL→NC)</option>
+      <option value="car">Carolinas + Gulf Stream</option>
+      <option value="mid">Mid-Atlantic</option>
+      <option value="ne">Northeast</option>
+    </select>
+  </div>
+  <div class="ctrl"><label>Time</label>
+    <select id="span"><option value="48">48 h</option><option value="96" selected>96 h</option><option value="168">7 days</option></select>
+  </div>
+  <div class="ctrl seg" id="sensors">
+    <button class="pill active" data-sen="all">All sats</button>
+    <button class="pill" data-sen="N20">N20</button>
+    <button class="pill" data-sen="NPP">NPP</button>
+    <button class="pill" data-sen="N21">N21</button>
+  </div>
+  <button class="act" id="refresh">↻ Refresh</button>
+  <span id="legend"><span>cool</span><span class="ramp"></span><span>warm</span></span>
+  <span id="status">—</span>
+</header>
+
+<div id="grid"></div>
+
+<div id="lb"><div class="x" onclick="closeLB()">✕</div><img id="lb-img"/><div class="cap" id="lb-cap"></div></div>
+
+<script>
+const FN='/.netlify/functions/sat-pass';
+const REGIONS={
+  full:{name:'Full East Coast',S:24,N:45,W:-82,E:-65},
+  se:{name:'Southeast (FL→NC)',S:27,N:36,W:-82,E:-72},
+  car:{name:'Carolinas + Gulf Stream',S:31,N:37,W:-79,E:-71},
+  mid:{name:'Mid-Atlantic',S:35,N:41,W:-77,E:-69},
+  ne:{name:'Northeast',S:39,N:45,W:-74,E:-65}
+};
+let product='sst', regionKey='full', spanHours=96, sensorFilter='all';
+const tileCache={}, baseCache={}, cards={};
+let passes=[];
+
+// ---- SST palette: °F -> RGB (blue cold -> red hot), fixed range ----
+const SST_STOPS=[[50,[0,26,160]],[58,[0,80,220]],[64,[0,180,200]],[70,[0,220,80]],[76,[200,230,0]],[82,[255,160,0]],[88,[255,20,20]]];
+function sstColorF(f){
+  if(f<=SST_STOPS[0][0]) return SST_STOPS[0][1];
+  for(let i=0;i<SST_STOPS.length-1;i++){
+    const a=SST_STOPS[i],b=SST_STOPS[i+1];
+    if(f<=b[0]){const t=(f-a[0])/(b[0]-a[0]);return [0,1,2].map(j=>Math.round(a[1][j]+(b[1][j]-a[1][j])*t));}
+  }
+  return SST_STOPS[SST_STOPS.length-1][1];
+}
+const cToF=c=>c*9/5+32;
+
+function dataCanvas(grid,nLat,nLon){
+  const cv=document.createElement('canvas');cv.width=nLon;cv.height=nLat;
+  const ctx=cv.getContext('2d');const id=ctx.createImageData(nLon,nLat);const d=id.data;
+  for(let k=0;k<grid.length;k++){const c=grid[k];const o=k*4;
+    if(c==null){d[o+3]=0;continue;}
+    const col=sstColorF(cToF(c));d[o]=col[0];d[o+1]=col[1];d[o+2]=col[2];d[o+3]=255;}
+  ctx.putImageData(id,0,0);return cv;
+}
+function composite(tile,baseImg,scale){
+  const W=baseImg?baseImg.naturalWidth*(scale||1):tile.nLon, H=baseImg?baseImg.naturalHeight*(scale||1):tile.nLat;
+  const cv=document.createElement('canvas');cv.width=W;cv.height=H;const ctx=cv.getContext('2d');
+  if(baseImg){try{ctx.drawImage(baseImg,0,0,W,H);}catch(e){ctx.fillStyle='#0a1622';ctx.fillRect(0,0,W,H);}}
+  else{ctx.fillStyle='#0a1622';ctx.fillRect(0,0,W,H);}
+  ctx.globalAlpha=0.9;ctx.imageSmoothingEnabled=true;ctx.drawImage(dataCanvas(tile.grid,tile.nLat,tile.nLon),0,0,W,H);ctx.globalAlpha=1;
+  return cv;
+}
+
+function rb(){return REGIONS[regionKey];}
+function boxQuery(){const r=rb();return {minLat:r.S,maxLat:r.N,minLon:r.W,maxLon:r.E};}
+function strideFor(targetCols){const r=rb();const cols=Math.abs(r.E-r.W)/0.02;let s=Math.max(1,Math.ceil(cols/(targetCols||120)));return s>16?16:s;}
+const qs=o=>Object.keys(o).map(k=>k+'='+encodeURIComponent(o[k])).join('&');
+function fmtTime(iso){return new Date(iso).toLocaleString(undefined,{month:'short',day:'numeric',hour:'numeric',minute:'2-digit'});}
+function isDay(iso,lon){const d=new Date(iso);const s=d.getUTCHours()+d.getUTCMinutes()/60+lon/15;let h=((s%24)+24)%24;return h>=6&&h<18;}
+
+function esriUrl(scaleH){
+  const r=rb();const H=scaleH||300,W=Math.max(80,Math.round(H*(r.E-r.W)/(r.N-r.S)));
+  return `https://server.arcgisonline.com/ArcGIS/rest/services/Ocean/World_Ocean_Base/MapServer/export`+
+    `?bbox=${r.W},${r.S},${r.E},${r.N}&bboxSR=4326&imageSR=4326&size=${W},${H}&format=png24&transparent=false&f=image`;
+}
+function loadBase(){
+  if(baseCache[regionKey]!==undefined) return Promise.resolve(baseCache[regionKey]);
+  return new Promise(res=>{const img=new Image();
+    img.onload=()=>{baseCache[regionKey]=img;res(img);};
+    img.onerror=()=>{baseCache[regionKey]=null;res(null);};
+    img.src=esriUrl(300);});
+}
+
+const statusEl=()=>document.getElementById('status');
+const gridEl=()=>document.getElementById('grid');
+
+async function load(){
+  if(product!=='sst'){
+    gridEl().innerHTML='<div class="empty"><span class="tag">CHLOROPHYLL · per-sensor scans</span>'+
+      '<h2>Chlorophyll passes — wiring next</h2>'+
+      '<p>Granular per-sensor chlorophyll (NOAA-20, SNPP) comes from NASA OB.DAAC ocean-color products on the same OPeNDAP backend the SST passes use. I\'m wiring and verifying that data path next, exactly like we proved SST. SST is live now — flip the toggle back to see it.</p></div>';
+    statusEl().textContent='Chlorophyll — next';
+    document.getElementById('legend').style.display='none';
+    return;
+  }
+  document.getElementById('legend').style.display='flex';
+  statusEl().textContent='Finding passes…';
+  gridEl().innerHTML='<div class="empty"><h2>Loading passes…</h2><p>Scanning NOAA-20 &amp; NPP overpasses over '+rb().name+', last '+spanHours+' h.</p></div>';
+  loadBase();
+  try{
+    const url=`${FN}?mode=list&hours=${spanHours}&${qs(boxQuery())}&cb=${Date.now()}`;
+    const r=await fetch(url);const j=await r.json();
+    if(j.error){statusEl().textContent='Error: '+(j.note||j.error);gridEl().innerHTML='<div class="empty"><h2>Backend error</h2><p>'+(j.note||j.error)+'</p></div>';return;}
+    passes=j.passes||[];const c=j.counts||{};
+    statusEl().textContent=`${passes.length} passes · N20 ${c.N20||0} · NPP ${c.NPP||0} · N21 ${c.N21||0} · ${rb().name}`;
+    renderCards();
+    kickThumbs();
+  }catch(e){statusEl().textContent='Failed to load';gridEl().innerHTML='<div class="empty"><h2>Network error</h2><p>Could not reach the satellite backend.</p></div>';}
+}
+
+function visiblePasses(){return passes.filter(p=>sensorFilter==='all'||p.sensor===sensorFilter);}
+
+function renderCards(){
+  const list=visiblePasses();
+  if(!list.length){gridEl().innerHTML='<div class="empty"><h2>No passes</h2><p>No '+(sensorFilter==='all'?'':sensorFilter+' ')+'SST overpasses over '+rb().name+' in the last '+spanHours+' h. Try a longer time span or another sensor.</p></div>';return;}
+  gridEl().innerHTML='';
+  const r=rb();const lonC=(r.W+r.E)/2;const aspect=(r.E-r.W)/(r.N-r.S);
+  for(const p of list){
+    const card=document.createElement('div');card.className='card';
+    const day=isDay(p.time_start,lonC);
+    card.innerHTML=
+      '<div class="thumb-wrap" style="aspect-ratio:'+aspect.toFixed(3)+'">'+
+        '<span class="spin">loading…</span>'+
+        '<span class="badge '+p.sensor+'">'+p.sensor+'</span>'+
+        '<span class="dn">'+(day?'☀️':'🌙')+'</span>'+
+        '<span class="clar"><i style="width:0%"></i></span></div>'+
+      '<div class="info"><span class="t">'+fmtTime(p.time_start)+'</span>'+
+        '<span class="m"><span>'+p.sensor+' VIIRS SST</span><span class="temp">—</span></span></div>';
+    card.onclick=()=>openLB(p);
+    gridEl().appendChild(card);
+    cards[p.granule]={root:card,wrap:card.querySelector('.thumb-wrap'),bar:card.querySelector('.clar>i'),temp:card.querySelector('.temp'),spin:card.querySelector('.spin')};
+    if(tileCache[p.granule]) applyTile(p,tileCache[p.granule]);
+  }
+}
+
+function applyTile(p,tile){
+  const el=cards[p.granule];if(!el||!tile||!tile.grid)return;
+  const cv=composite(tile,baseCache[regionKey]||null,1);cv.className='thumb';
+  if(el.spin)el.spin.remove();
+  const old=el.wrap.querySelector('canvas');if(old)old.remove();
+  el.wrap.insertBefore(cv,el.wrap.firstChild);
+  el.bar.style.width=(tile.clarity_pct||0)+'%';
+  if(tile.sst&&el.temp)el.temp.textContent=Math.round(cToF(tile.sst.min_c))+'–'+Math.round(cToF(tile.sst.max_c))+'°F';
+}
+
+async function kickThumbs(){
+  await loadBase();
+  visiblePasses().forEach(p=>{if(tileCache[p.granule])applyTile(p,tileCache[p.granule]);});
+  const list=visiblePasses().filter(p=>!tileCache[p.granule]);
+  let i=0;const N=4;
+  async function worker(){
+    while(i<list.length){const p=list[i++];
+      try{
+        const url=`${FN}?mode=tile&stride=${strideFor(120)}&g=${encodeURIComponent(p.opendap)}&${qs(boxQuery())}`;
+        const r=await fetch(url);const j=await r.json();
+        if(!j.error&&j.grid){tileCache[p.granule]=j;applyTile(p,j);}
+        else{const el=cards[p.granule];if(el&&el.spin)el.spin.textContent='no data';}
+      }catch(e){const el=cards[p.granule];if(el&&el.spin)el.spin.textContent='err';}
+    }
+  }
+  await Promise.all(Array.from({length:N},()=>worker()));
+}
+
+// ---- lightbox: load a finer render of the pass ----
+async function openLB(p){
+  const lb=document.getElementById('lb');lb.classList.add('open');
+  document.getElementById('lb-cap').textContent='Loading '+p.sensor+' '+fmtTime(p.time_start)+'…';
+  document.getElementById('lb-img').src='';
+  try{
+    const base=await new Promise(res=>{const img=new Image();img.onload=()=>res(img);img.onerror=()=>res(null);img.src=esriUrl(700);});
+    const url=`${FN}?mode=tile&stride=${strideFor(360)}&g=${encodeURIComponent(p.opendap)}&${qs(boxQuery())}`;
+    const r=await fetch(url);const j=await r.json();
+    if(j.error||!j.grid){document.getElementById('lb-cap').textContent='No data for that pass';return;}
+    const cv=composite(j,base,1);
+    document.getElementById('lb-img').src=cv.toDataURL('image/png');
+    const tp=j.sst?(' · '+Math.round(cToF(j.sst.min_c))+'–'+Math.round(cToF(j.sst.max_c))+'°F'):'';
+    document.getElementById('lb-cap').textContent=p.sensor+' VIIRS SST · '+fmtTime(p.time_start)+' · '+(j.clarity_pct!=null?j.clarity_pct+'% clear':'')+tp+' · '+rb().name;
+  }catch(e){document.getElementById('lb-cap').textContent='Failed to load pass';}
+}
+function closeLB(){document.getElementById('lb').classList.remove('open');}
+
+// ---- controls ----
+document.querySelectorAll('[data-prod]').forEach(b=>b.onclick=()=>{document.querySelectorAll('[data-prod]').forEach(x=>x.classList.remove('active'));b.classList.add('active');product=b.dataset.prod;load();});
+document.querySelectorAll('[data-sen]').forEach(b=>b.onclick=()=>{document.querySelectorAll('[data-sen]').forEach(x=>x.classList.remove('active'));b.classList.add('active');sensorFilter=b.dataset.sen;renderCards();kickThumbs();});
+document.getElementById('region').onchange=e=>{regionKey=e.target.value;load();};
+document.getElementById('span').onchange=e=>{spanHours=parseInt(e.target.value,10)||96;load();};
+document.getElementById('refresh').onclick=()=>load();
+document.getElementById('lb').onclick=e=>{if(e.target.id==='lb')closeLB();};
+document.addEventListener('keydown',e=>{if(e.key==='Escape')closeLB();});
+
+load();
+</script>
+</body>
+</html>
