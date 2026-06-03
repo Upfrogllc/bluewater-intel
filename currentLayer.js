@@ -55,8 +55,16 @@ export class CurrentLayer {
     this._loading = false;
     this._abortController = null;
 
+    // ── Color-by-speed range (knots). The spectrum stretches across [min,max]. ──
+    this._colorMinKt = (options.colorMinKt != null) ? options.colorMinKt : 0.10;
+    this._colorMaxKt = (options.colorMaxKt != null) ? options.colorMaxKt : 3.00;
+    this._ctrl = null;
+
     // Re-render arrows on zoom (spacing needs recalculating)
     this._map.on("zoomend", () => this._renderArrows());
+
+    // Inject the speed legend + range filter control
+    this._buildControl();
   }
 
   // ─── Public API ─────────────────────────────────────────────────────────
@@ -146,28 +154,27 @@ export class CurrentLayer {
     const grid = this._currentData;
     if (!grid.length) return;
 
-    // Determine which grid points are visible at current zoom/spacing
-    const visible = this._subsampleGrid(grid);
-    const maxSpeed = Math.max(...visible.map((p) => p.speed), 0.01);
+    const degSpacing = this._degSpacing();
+    const visible = this._subsampleGrid(grid, degSpacing);
 
     visible.forEach((pt) => {
-      const arrow = this._makeArrow(pt, maxSpeed);
+      const arrow = this._makeArrow(pt, degSpacing);
       if (arrow) arrow.addTo(this._layer);
     });
+  }
+
+  /** Degrees-per-arrow at the current zoom (rough equator approximation) */
+  _degSpacing() {
+    const zoom = this._map.getZoom();
+    const degPerPx = 360 / (256 * Math.pow(2, zoom));
+    return this._opts.arrowSpacingPx * degPerPx;
   }
 
   /**
    * Subsample grid to avoid over-drawing at high zoom.
    * We want roughly one arrow per arrowSpacingPx screen pixels.
    */
-  _subsampleGrid(grid) {
-    const spacingPx = this._opts.arrowSpacingPx;
-    const zoom = this._map.getZoom();
-
-    // Degrees per pixel at current zoom (rough equator approximation)
-    const degPerPx = 360 / (256 * Math.pow(2, zoom));
-    const degSpacing = spacingPx * degPerPx;
-
+  _subsampleGrid(grid, degSpacing) {
     // Build a set of snapped grid keys to deduplicate
     const seen = new Set();
     return grid.filter((pt) => {
@@ -184,59 +191,110 @@ export class CurrentLayer {
    * Create a Leaflet arrow marker for a current vector.
    * Arrow length scaled to speed, colour to confidence tier.
    */
-  _makeArrow(pt, maxSpeed) {
+  _makeArrow(pt, degSpacing) {
     const { u, v, speed, dir, lat, lon } = pt;
-    if (speed < 0.01) return null; // skip near-zero vectors
+    if (speed < 0.001) return null;
 
-    const arrowScale = this._opts.arrowScale;
-    const confidence = this._meta?.confidence || "low";
+    // Speed in knots — both the range filter and the color mapping work in knots
+    const kt = speed * 1.94384;
+    const min = this._colorMinKt, max = this._colorMaxKt;
+    if (kt < min) return null;                          // FILTER: hide below-range water
+    let pos = (max > min) ? (kt - min) / (max - min) : 1;
+    if (pos < 0) pos = 0; if (pos > 1) pos = 1;         // clamp above-range to top color
+    const color = speedColor(pos);
 
-    // Arrow length in degrees (proportional to speed relative to max)
-    const relSpeed = speed / maxSpeed;
-    const arrowLenDeg = (speed * arrowScale) / 111000; // rough m/s → degrees
-
-    // End point of arrow
-    const endLat = lat + v * arrowLenDeg;
-    const endLon = lon + u * arrowLenDeg;
-
-    const color = {
-      high:   "#1D9E75",
-      medium: "#EF9F27",
-      low:    "#E24B4A",
-    }[confidence] || "#1D9E75";
-
-    const opacity = 0.4 + relSpeed * 0.5; // faster = more opaque
+    // FIXED length (direction only) — color now carries speed, not size
+    const arrowLenDeg = degSpacing * 0.62;
+    const sp = speed || 1e-6;
+    const ux = u / sp, uy = v / sp;
+    const cosLat = Math.cos((lat * Math.PI) / 180) || 1e-6;
+    const endLat = lat + uy * arrowLenDeg;
+    const endLon = lon + (ux * arrowLenDeg) / cosLat;
 
     const polyline = L.polyline(
       [[lat, lon], [endLat, endLon]],
-      { color, weight: 1.5 + relSpeed * 1.5, opacity }
+      { color, weight: 2.4, opacity: 0.95 }
     );
 
-    // Arrowhead using a rotated marker
     const arrowIcon = L.divIcon({
       html: `<div style="
         width:0;height:0;
         border-left: 4px solid transparent;
         border-right: 4px solid transparent;
-        border-bottom: 8px solid ${color};
+        border-bottom: 9px solid ${color};
         transform: rotate(${dir}deg);
-        opacity: ${opacity};
       "></div>`,
       iconSize: [8, 8],
       iconAnchor: [4, 4],
       className: "",
     });
-
     const marker = L.marker([endLat, endLon], { icon: arrowIcon, interactive: false });
 
-    // Tooltip with vector info
     polyline.bindTooltip(formatTooltip(pt, this._meta), {
-      sticky: true,
-      direction: "top",
-      className: "bw-current-tooltip",
+      sticky: true, direction: "top", className: "bw-current-tooltip",
     });
 
     return L.layerGroup([polyline, marker]);
+  }
+
+  // ─── Speed legend + 0.10–5.00 kt range filter control ────────────────────
+  _buildControl() {
+    if (this._ctrl || typeof document === "undefined") return;
+    const wrap = document.createElement("div");
+    wrap.id = "bw-cur-ctrl";
+    wrap.innerHTML = `
+      <style>
+        #bw-cur-ctrl{position:absolute;left:12px;bottom:112px;z-index:600;width:210px;
+          background:rgba(8,18,28,.86);backdrop-filter:blur(6px);-webkit-backdrop-filter:blur(6px);
+          border:1px solid rgba(255,255,255,.14);border-radius:10px;padding:10px 11px;color:#eaf2f5;
+          font-family:'Inter',system-ui,sans-serif;box-shadow:0 6px 22px rgba(0,0,0,.4);user-select:none}
+        #bw-cur-ctrl .t{font-size:11px;letter-spacing:.4px;text-transform:uppercase;color:#16d6c3;
+          font-weight:700;margin-bottom:7px;display:flex;justify-content:space-between;align-items:center}
+        #bw-cur-ctrl .bar{height:11px;border-radius:6px;margin:7px 0 3px;
+          background:linear-gradient(90deg,#2b6cff,#00cfe5,#1fd86b,#ffd23f,#ff8c1a,#ff2d2d)}
+        #bw-cur-ctrl .lab{display:flex;justify-content:space-between;font-size:10px;color:#9fb3bd;
+          font-family:'Space Mono',monospace}
+        #bw-cur-ctrl .row{display:flex;align-items:center;gap:7px;margin-top:8px;font-size:10px;color:#cfe0e6}
+        #bw-cur-ctrl .row b{width:24px;font-weight:600;color:#9fb3bd}
+        #bw-cur-ctrl .row span{width:30px;text-align:right;font-family:'Space Mono',monospace;color:#16d6c3}
+        #bw-cur-ctrl input[type=range]{flex:1;height:3px;accent-color:#16d6c3;cursor:pointer}
+        #bw-cur-ctrl .hint{font-size:9px;color:#7f97a2;margin-top:7px;line-height:1.35}
+      </style>
+      <div class="t"><span>Current speed</span><span style="color:#9fb3bd;font-weight:400">knots</span></div>
+      <div class="bar"></div>
+      <div class="lab"><span id="bw-cur-lmin">0.10</span><span id="bw-cur-lmid">—</span><span id="bw-cur-lmax">3.00</span></div>
+      <div class="row"><b>min</b><input type="range" id="bw-cur-min" min="0.10" max="5.00" step="0.10" value="${this._colorMinKt.toFixed(2)}"><span id="bw-cur-vmin">${this._colorMinKt.toFixed(2)}</span></div>
+      <div class="row"><b>max</b><input type="range" id="bw-cur-max" min="0.10" max="5.00" step="0.10" value="${this._colorMaxKt.toFixed(2)}"><span id="bw-cur-vmax">${this._colorMaxKt.toFixed(2)}</span></div>
+      <div class="hint">Color = speed across your range. Arrows below min are hidden; above max show the top color.</div>
+    `;
+    const host = document.getElementById("mapwrap") || document.body;
+    try { if (getComputedStyle(host).position === "static") host.style.position = "relative"; } catch(e){}
+    host.appendChild(wrap);
+    this._ctrl = wrap;
+
+    const minEl = wrap.querySelector("#bw-cur-min");
+    const maxEl = wrap.querySelector("#bw-cur-max");
+    const sync = (changed) => {
+      let lo = parseFloat(minEl.value), hi = parseFloat(maxEl.value);
+      if (lo > hi) {
+        if (changed === "min") { hi = lo; maxEl.value = hi.toFixed(2); }
+        else { lo = hi; minEl.value = lo.toFixed(2); }
+      }
+      this._colorMinKt = lo; this._colorMaxKt = hi;
+      this._updateLegend();
+      this._renderArrows();
+    };
+    minEl.addEventListener("input", () => sync("min"));
+    maxEl.addEventListener("input", () => sync("max"));
+    this._updateLegend();
+  }
+
+  _updateLegend() {
+    if (!this._ctrl) return;
+    const lo = this._colorMinKt, hi = this._colorMaxKt, mid = (lo + hi) / 2;
+    const set = (id, val) => { const e = this._ctrl.querySelector(id); if (e) e.textContent = val; };
+    set("#bw-cur-vmin", lo.toFixed(2)); set("#bw-cur-vmax", hi.toFixed(2));
+    set("#bw-cur-lmin", lo.toFixed(2)); set("#bw-cur-lmid", mid.toFixed(2)); set("#bw-cur-lmax", hi.toFixed(2));
   }
 }
 
@@ -266,6 +324,29 @@ export function buildConfidenceBadge(meta) {
 }
 
 // ─── Utilities ───────────────────────────────────────────────────────────────
+
+// Speed → spectrum color. pos in [0,1] maps blue → cyan → green → yellow → orange → red.
+function speedColor(pos){
+  const stops = [
+    [0.00,[43,108,255]],[0.20,[0,207,229]],[0.40,[31,216,107]],
+    [0.60,[255,210,63]],[0.80,[255,140,26]],[1.00,[255,45,45]],
+  ];
+  if (pos <= 0) return rgbStr(stops[0][1]);
+  if (pos >= 1) return rgbStr(stops[stops.length-1][1]);
+  for (let i=1;i<stops.length;i++){
+    if (pos <= stops[i][0]){
+      const p0=stops[i-1][0], c0=stops[i-1][1], p1=stops[i][0], c1=stops[i][1];
+      const t=(pos-p0)/(p1-p0);
+      return rgbStr([
+        Math.round(c0[0]+(c1[0]-c0[0])*t),
+        Math.round(c0[1]+(c1[1]-c0[1])*t),
+        Math.round(c0[2]+(c1[2]-c0[2])*t),
+      ]);
+    }
+  }
+  return rgbStr(stops[stops.length-1][1]);
+}
+function rgbStr(a){ return `rgb(${a[0]},${a[1]},${a[2]})`; }
 
 function computeStaleDays(timestamp) {
   if (!timestamp) return 0;
