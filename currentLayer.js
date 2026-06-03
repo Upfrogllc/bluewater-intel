@@ -59,6 +59,7 @@ export class CurrentLayer {
     this._colorMinKt = (options.colorMinKt != null) ? options.colorMinKt : 0.10;
     this._colorMaxKt = (options.colorMaxKt != null) ? options.colorMaxKt : 3.00;
     this._ctrl = null;
+    try { window.__bwCurRange = { minKt: this._colorMinKt, maxKt: this._colorMaxKt }; } catch(e){}
 
     // Re-render arrows on zoom (spacing needs recalculating)
     this._map.on("zoomend", () => this._renderArrows());
@@ -145,22 +146,11 @@ export class CurrentLayer {
   // ─── Rendering ───────────────────────────────────────────────────────────
 
   _renderArrows() {
-    if (!this._currentData) return;
-
-    // Remove old layer
+    // The dense canvas "Live Currents" layer (drawCurrentOverlay in the app) is the
+    // visible vector field now. This module no longer draws its own sparse arrows —
+    // it just supplies the speed legend/range control and the confidence badge.
     this._layer?.remove();
-    this._layer = L.layerGroup().addTo(this._map);
-
-    const grid = this._currentData;
-    if (!grid.length) return;
-
-    const degSpacing = this._degSpacing();
-    const visible = this._subsampleGrid(grid, degSpacing);
-
-    visible.forEach((pt) => {
-      const arrow = this._makeArrow(pt, degSpacing);
-      if (arrow) arrow.addTo(this._layer);
-    });
+    this._layer = null;
   }
 
   /** Degrees-per-arrow at the current zoom (rough equator approximation) */
@@ -282,7 +272,7 @@ export class CurrentLayer {
       }
       this._colorMinKt = lo; this._colorMaxKt = hi;
       this._updateLegend();
-      this._renderArrows();
+      try { window.__bwCurRange = { minKt: lo, maxKt: hi }; } catch(e){}
     };
     minEl.addEventListener("input", () => sync("min"));
     maxEl.addEventListener("input", () => sync("max"));
