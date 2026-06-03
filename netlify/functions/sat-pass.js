@@ -59,7 +59,7 @@ exports.handler = async (event) => {
       const counts = {};
       const settled = await Promise.all(COLLECTIONS.map(async (col) => {
         try {
-          const list = await listGranules(col.short_name, bbox, start, 25);
+          const list = await listGranules(col.short_name, bbox, start, 50);
           counts[col.sensor] = list.length;
           return list.map((g) => ({ sensor: col.sensor, short_name: col.short_name, ...g }));
         } catch (e) { counts[col.sensor] = `err: ${String(e.message || e).slice(0, 60)}`; return []; }
@@ -200,4 +200,3 @@ function clampi(v, n) { return Math.max(0, Math.min(n - 1, v)); }
 function num(v, d) { const n = parseFloat(v); return Number.isFinite(n) ? n : d; }
 function r1(x) { return Math.round(x * 10) / 10; }
 function r4(x) { return Math.round(x * 1e4) / 1e4; }
- 
