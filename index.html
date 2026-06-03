@@ -2989,8 +2989,8 @@ function detectMicroEddies(){
       // Find neighbors in 4 directions — tighter radius than big eddy detector
       const right = currentGrid.find(q => Math.abs(q.lat - p.lat) < 0.03 && q.lng > p.lng && Math.abs(q.lng - p.lng) < 0.2);
       const left  = currentGrid.find(q => Math.abs(q.lat - p.lat) < 0.03 && q.lng < p.lng && Math.abs(q.lng - p.lng) < 0.2);
-      const up    = currentGrid.find(q => Math.abs(q.lng - p.lng) < 0.08 && q.lat > p.lat && Math.abs(q.lat - p.lat) < 0.15);
-      const down  = currentGrid.find(q => Math.abs(q.lng - p.lng) < 0.08 && q.lat < p.lat && Math.abs(q.lat - p.lat) < 0.15);
+      const up    = currentGrid.find(q => Math.abs(q.lng - p.lng) < 0.08 && q.lat > p.lat && Math.abs(q.lat - p.lat) < 0.2);
+      const down  = currentGrid.find(q => Math.abs(q.lng - p.lng) < 0.08 && q.lat < p.lat && Math.abs(q.lat - p.lat) < 0.2);
  
       if (!right || !left || !up || !down) continue;
  
@@ -3587,13 +3587,17 @@ async function fetchCurrents_Resolver(pts, sourceParam) {
     warning: data.warning || null,
   };
 
+  // off-grid cutoff scales with the grid the resolver actually returned, so a
+  // coarse strided field on a zoomed-out view doesn't silently drop arrows
+  const maxD = Math.max(0.4, (data.resolution || 0.25) * 1.6);
+
   const out = [];
   for (const [la, ln] of pts) {
     const near = grid
       .map(g => ({ g, d: Math.hypot(g.lat - la, g.lon - ln) }))
       .sort((a, b) => a.d - b.d)
       .slice(0, 4);
-    if (!near.length || near[0].d > 0.4) continue;   // off-grid / over land -> no arrow
+    if (!near.length || near[0].d > maxD) continue;   // off-grid / over land -> no arrow
     let u, v;
     if (near[0].d < 0.01) { u = near[0].g.u; v = near[0].g.v; }
     else {
