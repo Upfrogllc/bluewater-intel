@@ -1792,14 +1792,16 @@ function initSatViewerDate() {
 }
 
 function toggleSatViewer() {
+  // Open the full-page, RipCharts-style imagery gallery (per-overpass SST wall).
+  if (window.__bwOpenImagery) { window.__bwOpenImagery(); return; }
+  // Fallback to the legacy single-image panel if the gallery isn't ready yet
   satViewerOpen = !satViewerOpen;
   const panel = document.getElementById('sat-viewer-panel');
   const btn = document.getElementById('tbtn-sat-viewer');
-  panel.classList.toggle('open', satViewerOpen);
-  btn.classList.toggle('active', satViewerOpen);
+  if (panel) panel.classList.toggle('open', satViewerOpen);
+  if (btn) btn.classList.toggle('active', satViewerOpen);
   if (satViewerOpen) {
     if (!satViewerDate) initSatViewerDate();
-    // Auto-fetch on first open
     if (!satViewerImageData) fetchSatImage();
   }
 }
@@ -4923,7 +4925,10 @@ if(_mp) _mp.addEventListener('touchmove', e => {
     document.head.appendChild(style);
 
     btn=document.createElement('div'); btn.id='bw-img-btn'; btn.innerHTML='🛰 Imagery';
-    btn.title='Satellite imagery browser'; btn.onclick=()=>{ modal.classList.add('open'); switchTab(activeTab); };
+    btn.title='Satellite imagery browser';
+    const openGallery=()=>{ modal.classList.add('open'); switchTab(activeTab); };
+    btn.onclick=openGallery; btn.style.display='none'; // hidden: opened via the 🛰 toolbar button
+    window.__bwOpenImagery=openGallery;
 
     modal=document.createElement('div'); modal.id='bw-img-modal';
     let regOpts=Object.keys(REGIONS).map(k=>`<option value="${k}"${k===regionKey?' selected':''}>${REGIONS[k].name}</option>`).join('');
