@@ -4782,6 +4782,271 @@ if(_mp) _mp.addEventListener('touchmove', e => {
 // ═══════════════════════════════════════════
 // INIT
 // ═══════════════════════════════════════════
+
+// ═══════════════════════════════════════════
+// SATELLITE PASSES GALLERY (per-overpass SST "runs")
+// Reads existing globals: map, getViewBounds, satRanges, posToSstHue, hsvToRgb
+// ═══════════════════════════════════════════
+(function(){
+  const FN = '/.netlify/functions/sat-pass';
+  const tileCache = {};        // granule -> tile json
+  let galleryOverlay = null;   // L.imageOverlay for the selected pass
+  let lastPasses = [];
+  let selectedGranule = null;
+  let loadingList = false;
+  const cardEls = {};          // granule -> {root, canvas, meta}
+
+  // ---------- palette ----------
+  function sstColorForF(tF){
+    const r = (typeof satRanges!=='undefined' && satRanges.sst) ? satRanges.sst : {minF:72,maxF:88};
+    let pos = (tF - r.minF)/Math.max(0.01,(r.maxF - r.minF));
+    pos = pos<0?0:pos>1?1:pos;
+    const hue = posToSstHue(pos);
+    return hsvToRgb(hue, 0.88, 0.96);
+  }
+  const cToF = c => c*9/5+32;
+
+  function gridCanvas(grid,nLat,nLon){
+    const cv=document.createElement('canvas'); cv.width=nLon; cv.height=nLat;
+    const ctx=cv.getContext('2d'); const id=ctx.createImageData(nLon,nLat); const d=id.data;
+    for(let k=0;k<grid.length;k++){
+      const c=grid[k]; const o=k*4;
+      if(c==null){ d[o+3]=0; continue; }
+      const col=sstColorForF(cToF(c));
+      d[o]=col[0]; d[o+1]=col[1]; d[o+2]=col[2]; d[o+3]=255;
+    }
+    ctx.putImageData(id,0,0);
+    return cv;
+  }
+
+  // ---------- query helpers ----------
+  function boxParams(targetCols){
+    const b = (typeof getViewBounds==='function') ? getViewBounds()
+            : {south:33.5,north:35.5,west:-78,east:-74};
+    const minLat=Math.max(-89,b.south), maxLat=Math.min(89,b.north);
+    const minLon=Math.max(-179,b.west), maxLon=Math.min(179,b.east);
+    const cols=Math.abs(maxLon-minLon)/0.02;
+    let stride=Math.max(1, Math.ceil(cols/(targetCols||80)));
+    if(stride>16) stride=16;
+    return {minLat:+minLat.toFixed(3),maxLat:+maxLat.toFixed(3),minLon:+minLon.toFixed(3),maxLon:+maxLon.toFixed(3),stride};
+  }
+  const qs = o => Object.keys(o).map(k=>k+'='+encodeURIComponent(o[k])).join('&');
+
+  function fmtTime(iso){
+    const d=new Date(iso);
+    return d.toLocaleString(undefined,{month:'short',day:'numeric',hour:'numeric',minute:'2-digit'});
+  }
+  function isDay(iso, lon){
+    const d=new Date(iso);
+    const solar=d.getUTCHours()+d.getUTCMinutes()/60 + lon/15;
+    let h=((solar%24)+24)%24; return h>=6 && h<18;
+  }
+
+  // ---------- DOM ----------
+  let panel, listEl, statusEl, btn;
+  function buildUI(){
+    const style=document.createElement('style');
+    style.textContent = `
+      #bw-runs-btn{position:absolute;left:12px;bottom:104px;z-index:800;display:flex;align-items:center;gap:6px;
+        background:rgba(11,37,69,.92);color:#d7f7f2;border:1px solid #16d6c3;border-radius:8px;
+        padding:8px 11px;font:600 12px/1 system-ui,sans-serif;cursor:pointer;box-shadow:0 2px 10px rgba(0,0,0,.35)}
+      #bw-runs-btn:hover{background:rgba(16,214,195,.18)}
+      #bw-runs-panel{position:absolute;left:12px;top:12px;bottom:12px;width:300px;z-index:801;
+        background:rgba(8,22,40,.96);backdrop-filter:blur(6px);border:1px solid rgba(22,214,195,.35);
+        border-radius:12px;display:none;flex-direction:column;color:#e6f2f5;box-shadow:0 6px 28px rgba(0,0,0,.5);overflow:hidden}
+      #bw-runs-panel.open{display:flex}
+      #bw-runs-head{display:flex;align-items:center;gap:8px;padding:11px 12px;border-bottom:1px solid rgba(22,214,195,.25)}
+      #bw-runs-head h3{margin:0;font:700 13px system-ui,sans-serif;letter-spacing:.3px;color:#16d6c3;flex:1}
+      #bw-runs-head button{background:transparent;border:1px solid rgba(255,255,255,.25);color:#cfe;border-radius:6px;
+        padding:4px 8px;font-size:11px;cursor:pointer}
+      #bw-runs-head button:hover{border-color:#16d6c3;color:#16d6c3}
+      #bw-runs-status{padding:7px 12px;font:500 11px system-ui;color:#9fc7cf;border-bottom:1px solid rgba(255,255,255,.06)}
+      #bw-runs-list{flex:1;overflow-y:auto;padding:8px;display:flex;flex-direction:column;gap:8px}
+      .bw-card{display:flex;gap:9px;padding:7px;border:1px solid rgba(255,255,255,.08);border-radius:9px;
+        cursor:pointer;background:rgba(255,255,255,.02);transition:border-color .15s,background .15s}
+      .bw-card:hover{border-color:rgba(22,214,195,.6);background:rgba(22,214,195,.07)}
+      .bw-card.sel{border-color:#16d6c3;background:rgba(22,214,195,.13)}
+      .bw-thumb{width:78px;height:64px;border-radius:6px;background:#06121f;flex:none;
+        image-rendering:pixelated;object-fit:cover;border:1px solid rgba(255,255,255,.08)}
+      .bw-thumb-wrap{position:relative;width:78px;height:64px;flex:none}
+      .bw-thumb-wrap .bw-spin{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;
+        font-size:10px;color:#6fa;opacity:.8}
+      .bw-meta{flex:1;min-width:0;display:flex;flex-direction:column;gap:3px;justify-content:center}
+      .bw-row1{display:flex;align-items:center;gap:6px}
+      .bw-badge{font:700 9px system-ui;padding:2px 5px;border-radius:4px;letter-spacing:.4px}
+      .bw-badge.N20{background:#16d6c3;color:#04222c}
+      .bw-badge.NPP{background:#5b8def;color:#06122a}
+      .bw-badge.N21{background:#c98bff;color:#1c0830}
+      .bw-dn{font-size:11px}
+      .bw-time{font:600 12px system-ui;color:#eaf6f8;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+      .bw-sub{font:500 10px system-ui;color:#8fb6bf;display:flex;gap:8px;align-items:center}
+      .bw-clarbar{flex:1;height:5px;border-radius:3px;background:rgba(255,255,255,.1);overflow:hidden;min-width:36px}
+      .bw-clarbar > i{display:block;height:100%;background:linear-gradient(90deg,#16d6c3,#7CFFB2)}
+      #bw-runs-foot{padding:7px 12px;border-top:1px solid rgba(255,255,255,.08);font:500 10px system-ui;color:#7fa}
+      #bw-runs-foot button{background:transparent;border:1px solid rgba(255,120,120,.4);color:#ffb3b3;border-radius:6px;
+        padding:3px 8px;font-size:10px;cursor:pointer;float:right}
+    `;
+    document.head.appendChild(style);
+
+    btn=document.createElement('div');
+    btn.id='bw-runs-btn';
+    btn.innerHTML='🛰 Passes';
+    btn.title='Browse individual satellite SST overpasses';
+    btn.onclick=togglePanel;
+
+    panel=document.createElement('div');
+    panel.id='bw-runs-panel';
+    panel.innerHTML=
+      '<div id="bw-runs-head"><h3>SST Satellite Passes</h3>'+
+      '<button id="bw-runs-refresh">↻</button>'+
+      '<button id="bw-runs-close">✕</button></div>'+
+      '<div id="bw-runs-status">—</div>'+
+      '<div id="bw-runs-list"></div>'+
+      '<div id="bw-runs-foot"><span id="bw-runs-foot-txt">Newest first · current map view</span>'+
+      '<button id="bw-runs-clear">Clear overlay</button></div>';
+
+    const host=document.getElementById('mapwrap') || document.body;
+    host.appendChild(btn);
+    host.appendChild(panel);
+
+    listEl=panel.querySelector('#bw-runs-list');
+    statusEl=panel.querySelector('#bw-runs-status');
+    panel.querySelector('#bw-runs-close').onclick=()=>panel.classList.remove('open');
+    panel.querySelector('#bw-runs-refresh').onclick=()=>loadList(true);
+    panel.querySelector('#bw-runs-clear').onclick=clearOverlay;
+  }
+
+  function togglePanel(){
+    if(!panel) return;
+    panel.classList.toggle('open');
+    if(panel.classList.contains('open') && !lastPasses.length) loadList(false);
+  }
+
+  // ---------- list ----------
+  async function loadList(force){
+    if(loadingList) return;
+    loadingList=true;
+    statusEl.textContent='Finding passes…';
+    listEl.innerHTML='';
+    try{
+      const bp=boxParams();
+      const url=`${FN}?mode=list&hours=96&${qs({minLat:bp.minLat,maxLat:bp.maxLat,minLon:bp.minLon,maxLon:bp.maxLon})}&cb=${Date.now()}`;
+      const r=await fetch(url);
+      const j=await r.json();
+      if(j.error){ statusEl.textContent='Error: '+(j.note||j.error); loadingList=false; return; }
+      lastPasses=j.passes||[];
+      const c=j.counts||{};
+      statusEl.textContent=`${lastPasses.length} passes · N20 ${c.N20||0} · NPP ${c.NPP||0} · N21 ${c.N21||0}`;
+      renderCards(lastPasses);
+      loadThumbs(lastPasses);
+    }catch(e){
+      statusEl.textContent='Failed to load passes';
+    }
+    loadingList=false;
+  }
+
+  function renderCards(passes){
+    listEl.innerHTML='';
+    const lonC=(boxParams().minLon+boxParams().maxLon)/2;
+    for(const p of passes){
+      const card=document.createElement('div');
+      card.className='bw-card'+(p.granule===selectedGranule?' sel':'');
+      const day=isDay(p.time_start, lonC);
+      card.innerHTML=
+        '<div class="bw-thumb-wrap"><div class="bw-spin">···</div></div>'+
+        '<div class="bw-meta">'+
+          '<div class="bw-row1"><span class="bw-badge '+p.sensor+'">'+p.sensor+'</span>'+
+            '<span class="bw-dn">'+(day?'☀️':'🌙')+'</span>'+
+            '<span class="bw-time">'+fmtTime(p.time_start)+'</span></div>'+
+          '<div class="bw-sub"><span class="bw-clar">—</span>'+
+            '<span class="bw-clarbar"><i style="width:0%"></i></span></div>'+
+          '<div class="bw-sub bw-temp" style="color:#bfe">—</div>'+
+        '</div>';
+      card.onclick=()=>selectPass(p);
+      listEl.appendChild(card);
+      cardEls[p.granule]={root:card, wrap:card.querySelector('.bw-thumb-wrap'),
+        clar:card.querySelector('.bw-clar'), bar:card.querySelector('.bw-clarbar > i'),
+        temp:card.querySelector('.bw-temp')};
+      const cached=tileCache[p.granule];
+      if(cached) applyTileToCard(p.granule, cached);
+    }
+  }
+
+  function applyTileToCard(granule, tile){
+    const el=cardEls[granule]; if(!el) return;
+    if(tile && tile.grid){
+      const cv=gridCanvas(tile.grid, tile.nLat, tile.nLon);
+      cv.className='bw-thumb';
+      el.wrap.innerHTML='';
+      el.wrap.appendChild(cv);
+      el.clar.textContent=(tile.clarity_pct!=null?tile.clarity_pct:'—')+'% clear';
+      el.bar.style.width=(tile.clarity_pct||0)+'%';
+      if(tile.sst){
+        el.temp.textContent=Math.round(cToF(tile.sst.min_c))+'–'+Math.round(cToF(tile.sst.max_c))+'°F';
+      }
+    }
+  }
+
+  // ---------- thumbnail loader (concurrency-limited) ----------
+  async function loadThumbs(passes){
+    let i=0; const N=3;
+    async function worker(){
+      while(i<passes.length){
+        const p=passes[i++];
+        if(tileCache[p.granule]){ applyTileToCard(p.granule, tileCache[p.granule]); continue; }
+        try{
+          const bp=boxParams();
+          const url=`${FN}?mode=tile&stride=4&g=${encodeURIComponent(p.opendap)}&${qs({minLat:bp.minLat,maxLat:bp.maxLat,minLon:bp.minLon,maxLon:bp.maxLon})}`;
+          const r=await fetch(url); const j=await r.json();
+          if(!j.error){ tileCache[p.granule]=j; applyTileToCard(p.granule, j); }
+          else { const el=cardEls[p.granule]; if(el) el.clar.textContent='no data'; }
+        }catch(e){ const el=cardEls[p.granule]; if(el) el.clar.textContent='err'; }
+      }
+    }
+    await Promise.all(Array.from({length:N},()=>worker()));
+  }
+
+  // ---------- select -> map overlay ----------
+  async function selectPass(p){
+    selectedGranule=p.granule;
+    Object.values(cardEls).forEach(e=>e.root.classList.remove('sel'));
+    if(cardEls[p.granule]) cardEls[p.granule].root.classList.add('sel');
+    statusEl.textContent='Loading '+p.sensor+' '+fmtTime(p.time_start)+'…';
+    try{
+      const bp=boxParams(160); // finer for the map
+      const url=`${FN}?mode=tile&stride=${bp.stride}&g=${encodeURIComponent(p.opendap)}&${qs({minLat:bp.minLat,maxLat:bp.maxLat,minLon:bp.minLon,maxLon:bp.maxLon})}`;
+      const r=await fetch(url); const j=await r.json();
+      if(j.error||!j.grid){ statusEl.textContent='No data for that pass in view'; return; }
+      const cv=gridCanvas(j.grid, j.nLat, j.nLon);
+      const dataUrl=cv.toDataURL('image/png');
+      const b=j.bounds;
+      const bounds=[[b.south,b.west],[b.north,b.east]];
+      if(galleryOverlay){ galleryOverlay.setUrl(dataUrl); galleryOverlay.setBounds(bounds); galleryOverlay.setOpacity(0.82); }
+      else if(typeof map!=='undefined' && map){
+        galleryOverlay=L.imageOverlay(dataUrl,bounds,{opacity:0.82,pane:'satPane',interactive:false}).addTo(map);
+      }
+      const cl=j.clarity_pct!=null?j.clarity_pct+'% clear':'';
+      const tp=j.sst?(' · '+Math.round(cToF(j.sst.min_c))+'–'+Math.round(cToF(j.sst.max_c))+'°F'):'';
+      statusEl.textContent=p.sensor+' '+fmtTime(p.time_start)+' · '+cl+tp;
+    }catch(e){ statusEl.textContent='Failed to load pass'; }
+  }
+
+  function clearOverlay(){
+    if(galleryOverlay && typeof map!=='undefined' && map){ map.removeLayer(galleryOverlay); }
+    galleryOverlay=null; selectedGranule=null;
+    Object.values(cardEls).forEach(e=>e.root.classList.remove('sel'));
+    if(statusEl) statusEl.textContent='Overlay cleared';
+  }
+
+  // refresh list every 4h while panel has been opened at least once
+  setInterval(()=>{ if(lastPasses.length) loadList(true); }, 4*3600*1000);
+
+  function init(){ buildUI(); }
+  if(document.readyState==='loading') document.addEventListener('DOMContentLoaded', init);
+  else init();
+})();
+
+
 window.addEventListener('load', () => {
   initLeafletMap();
   initSpeciesUI();
