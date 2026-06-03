@@ -17,7 +17,7 @@ exports.handler = async (event) => {
     return { statusCode: 400, headers, body: JSON.stringify({ error: 'Invalid JSON' }) };
   }
 
-  const { dataset = 'noaa20_sst', date, south = 25.0, north = 29.5, west = -82.0, east = -79.0 } = body;
+  const { dataset = 'noaa20_sst', date, south = 33.5, north = 35.5, west = -78.0, east = -74.0 } = body;
 
   const DATASETS = {
     noaa20_sst:    { id: 'nesdisVHNnoaa20SSTasNRT',   var: 'analysed_sst', time: 'T12:00:00Z', label: 'NOAA-20 VIIRS SST',    type: 'sst', kelvin: true  },
