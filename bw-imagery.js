@@ -8,6 +8,15 @@
     try{ if(typeof map!=='undefined' && map && map.addLayer){ window.map=map; return map; } }catch(e){}
     return null;
   }
+  // Full-resolution box from the CURRENT map view (auto-coarsens only when zoomed far out)
+  function viewBoxStride(m){
+    const b=m.getBounds();
+    const minLat=Math.max(-89,b.getSouth()), maxLat=Math.min(89,b.getNorth());
+    const minLon=Math.max(-179,b.getWest()),  maxLon=Math.min(179,b.getEast());
+    const cols=Math.abs(maxLon-minLon)/0.02;
+    let stride=Math.max(1,Math.ceil(cols/420)); if(stride>16) stride=16; // 1 = native ~2km
+    return {minLat:+minLat.toFixed(3),maxLat:+maxLat.toFixed(3),minLon:+minLon.toFixed(3),maxLon:+maxLon.toFixed(3),stride};
+  }
   const FN='/.netlify/functions/sat-pass';
   const REGIONS={
     full:{name:'Full East Coast',S:24,N:45,W:-82,E:-65},
@@ -206,23 +215,25 @@
     selectedGranule=p.granule;
     Object.values(cards).forEach(e=>e.root.classList.remove('sel'));
     if(cards[p.granule])cards[p.granule].root.classList.add('sel');
-    statusEl.textContent='Loading '+p.sensor+' '+fmtTime(p.time_start)+' onto map…';
+    const m=getMap();
+    if(!m){ statusEl.textContent='Map not ready — open the map first, then pick a scan'; return; }
+    const vb=viewBoxStride(m); // FULL-RES over the current map view
+    statusEl.textContent='Loading '+p.sensor+' '+fmtTime(p.time_start)+' at full resolution…';
     try{
-      const url=`${FN}?mode=tile&stride=${strideFor(220)}&g=${encodeURIComponent(p.opendap)}&${qs(boxQuery())}`;
+      const url=`${FN}?mode=tile&stride=${vb.stride}&g=${encodeURIComponent(p.opendap)}&${qs({minLat:vb.minLat,maxLat:vb.maxLat,minLon:vb.minLon,maxLon:vb.maxLon})}`;
       const r=await fetch(url);const j=await r.json();
-      if(j.error||!j.grid){statusEl.textContent='No data for that pass';return;}
+      if(j.error||!j.grid){statusEl.textContent='No data for that pass in this view — pan to where the scan has coverage';return;}
       const dataUrl=dataCanvas(j.grid,j.nLat,j.nLon).toDataURL('image/png');
       const b=j.bounds;const bounds=[[b.south,b.west],[b.north,b.east]];
       const op=parseFloat((document.getElementById('bwg-op')||{}).value||0.85);
-      const m=getMap();
-      if(!m){ statusEl.textContent='Map not ready — try again in a moment'; return; }
       if(galleryOverlay){galleryOverlay.setUrl(dataUrl);galleryOverlay.setBounds(bounds);galleryOverlay.setOpacity(op);}
       else { galleryOverlay=L.imageOverlay(dataUrl,bounds,{opacity:op,pane:'satPane',interactive:false}).addTo(m); }
-      try{m.fitBounds(bounds,{padding:[20,20]});}catch(e){}
+      // keep the user's current view (do NOT fitBounds) so it loads sharp where they're looking
       const tp=j.sst?(' · '+Math.round(cToF(j.sst.min_c))+'–'+Math.round(cToF(j.sst.max_c))+'°F'):'';
-      document.getElementById('bwg-scanlabel').textContent=p.sensor+' SST · '+fmtTime(p.time_start)+(j.clarity_pct!=null?' · '+j.clarity_pct+'% clr':'')+tp;
+      const resTxt=vb.stride===1?' · full res':' · '+(vb.stride*2)+'km';
+      document.getElementById('bwg-scanlabel').textContent=p.sensor+' SST · '+fmtTime(p.time_start)+(j.clarity_pct!=null?' · '+j.clarity_pct+'% clr':'')+tp+resTxt;
       ctrl.classList.add('show');
-      modal.classList.remove('open'); // reveal the live map with the scan on it
+      modal.classList.remove('open'); // reveal the live map with the sharp scan on it
     }catch(e){statusEl.textContent='Failed to load pass';}
   }
   function clearScan(){
@@ -236,6 +247,6 @@
   function ensureBuilt(){ if(_built) return; buildUI(); _built=true; }
   // Register the opener SYNCHRONOUSLY so the 🛰 button always finds it (no DOMContentLoaded race)
   window.__bwOpenImagery=function(){ ensureBuilt(); modal.classList.add('open'); load(); };
-  try{ console.log('%c[imagery] in-app gallery READY (build g7 · external file)','color:#16d6c3'); }catch(e){}
+  try{ console.log('%c[imagery] in-app gallery READY (build g8 · view-res)','color:#16d6c3'); }catch(e){}
   if(document.readyState==='loading') document.addEventListener('DOMContentLoaded', ensureBuilt); else ensureBuilt();
 })();
