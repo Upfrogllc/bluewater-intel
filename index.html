@@ -4784,34 +4784,39 @@ if(_mp) _mp.addEventListener('touchmove', e => {
 // ═══════════════════════════════════════════
 
 // ═══════════════════════════════════════════
-// SATELLITE PASSES GALLERY (per-overpass SST "runs")
+// SATELLITE IMAGERY BROWSER (full-page, RipCharts-style)
+// Tabs: SST (per-overpass, live) · Chlorophyll · Currents
 // Reads existing globals: map, getViewBounds, satRanges, posToSstHue, hsvToRgb
 // ═══════════════════════════════════════════
 (function(){
   const FN = '/.netlify/functions/sat-pass';
   const tileCache = {};        // granule -> tile json
-  let galleryOverlay = null;   // L.imageOverlay for the selected pass
-  let lastPasses = [];
+  let galleryOverlay = null;   // L.imageOverlay for the selected image
+  let activeTab = 'sst';
+  const state = { sst: { passes:[], loaded:false, loading:false } };
+  const cardEls = {};          // granule -> {root, wrap, clar, bar, temp}
   let selectedGranule = null;
-  let loadingList = false;
-  const cardEls = {};          // granule -> {root, canvas, meta}
 
   // ---------- palette ----------
   function sstColorForF(tF){
     const r = (typeof satRanges!=='undefined' && satRanges.sst) ? satRanges.sst : {minF:72,maxF:88};
     let pos = (tF - r.minF)/Math.max(0.01,(r.maxF - r.minF));
     pos = pos<0?0:pos>1?1:pos;
-    const hue = posToSstHue(pos);
-    return hsvToRgb(hue, 0.88, 0.96);
+    return hsvToRgb(posToSstHue(pos), 0.9, 0.97);
   }
   const cToF = c => c*9/5+32;
 
-  function gridCanvas(grid,nLat,nLon){
+  // cloud handling: 'gray' for thumbnails (so passes read as images), 'transparent' for map overlay
+  function gridCanvas(grid,nLat,nLon,cloud){
     const cv=document.createElement('canvas'); cv.width=nLon; cv.height=nLat;
     const ctx=cv.getContext('2d'); const id=ctx.createImageData(nLon,nLat); const d=id.data;
     for(let k=0;k<grid.length;k++){
       const c=grid[k]; const o=k*4;
-      if(c==null){ d[o+3]=0; continue; }
+      if(c==null){
+        if(cloud==='gray'){ d[o]=42; d[o+1]=54; d[o+2]=64; d[o+3]=255; }
+        else { d[o+3]=0; }
+        continue;
+      }
       const col=sstColorForF(cToF(c));
       d[o]=col[0]; d[o+1]=col[1]; d[o+2]=col[2]; d[o+3]=255;
     }
@@ -4826,15 +4831,16 @@ if(_mp) _mp.addEventListener('touchmove', e => {
     const minLat=Math.max(-89,b.south), maxLat=Math.min(89,b.north);
     const minLon=Math.max(-179,b.west), maxLon=Math.min(179,b.east);
     const cols=Math.abs(maxLon-minLon)/0.02;
-    let stride=Math.max(1, Math.ceil(cols/(targetCols||80)));
+    let stride=Math.max(1, Math.ceil(cols/(targetCols||90)));
     if(stride>16) stride=16;
     return {minLat:+minLat.toFixed(3),maxLat:+maxLat.toFixed(3),minLon:+minLon.toFixed(3),maxLon:+maxLon.toFixed(3),stride};
   }
   const qs = o => Object.keys(o).map(k=>k+'='+encodeURIComponent(o[k])).join('&');
-
   function fmtTime(iso){
-    const d=new Date(iso);
-    return d.toLocaleString(undefined,{month:'short',day:'numeric',hour:'numeric',minute:'2-digit'});
+    return new Date(iso).toLocaleString(undefined,{month:'short',day:'numeric',hour:'numeric',minute:'2-digit'});
+  }
+  function fmtDay(iso){
+    return new Date(iso).toLocaleDateString(undefined,{weekday:'short',month:'short',day:'numeric'});
   }
   function isDay(iso, lon){
     const d=new Date(iso);
@@ -4843,207 +4849,229 @@ if(_mp) _mp.addEventListener('touchmove', e => {
   }
 
   // ---------- DOM ----------
-  let panel, listEl, statusEl, btn;
+  let modal, gridEl, statusEl, tabsEl, btn;
   function buildUI(){
     const style=document.createElement('style');
     style.textContent = `
-      #bw-runs-btn{position:absolute;left:12px;bottom:104px;z-index:800;display:flex;align-items:center;gap:6px;
+      #bw-img-btn{position:absolute;left:12px;bottom:104px;z-index:800;display:flex;align-items:center;gap:6px;
         background:rgba(11,37,69,.92);color:#d7f7f2;border:1px solid #16d6c3;border-radius:8px;
-        padding:8px 11px;font:600 12px/1 system-ui,sans-serif;cursor:pointer;box-shadow:0 2px 10px rgba(0,0,0,.35)}
-      #bw-runs-btn:hover{background:rgba(16,214,195,.18)}
-      #bw-runs-panel{position:absolute;left:12px;top:12px;bottom:12px;width:300px;z-index:801;
-        background:rgba(8,22,40,.96);backdrop-filter:blur(6px);border:1px solid rgba(22,214,195,.35);
-        border-radius:12px;display:none;flex-direction:column;color:#e6f2f5;box-shadow:0 6px 28px rgba(0,0,0,.5);overflow:hidden}
-      #bw-runs-panel.open{display:flex}
-      #bw-runs-head{display:flex;align-items:center;gap:8px;padding:11px 12px;border-bottom:1px solid rgba(22,214,195,.25)}
-      #bw-runs-head h3{margin:0;font:700 13px system-ui,sans-serif;letter-spacing:.3px;color:#16d6c3;flex:1}
-      #bw-runs-head button{background:transparent;border:1px solid rgba(255,255,255,.25);color:#cfe;border-radius:6px;
-        padding:4px 8px;font-size:11px;cursor:pointer}
-      #bw-runs-head button:hover{border-color:#16d6c3;color:#16d6c3}
-      #bw-runs-status{padding:7px 12px;font:500 11px system-ui;color:#9fc7cf;border-bottom:1px solid rgba(255,255,255,.06)}
-      #bw-runs-list{flex:1;overflow-y:auto;padding:8px;display:flex;flex-direction:column;gap:8px}
-      .bw-card{display:flex;gap:9px;padding:7px;border:1px solid rgba(255,255,255,.08);border-radius:9px;
-        cursor:pointer;background:rgba(255,255,255,.02);transition:border-color .15s,background .15s}
-      .bw-card:hover{border-color:rgba(22,214,195,.6);background:rgba(22,214,195,.07)}
-      .bw-card.sel{border-color:#16d6c3;background:rgba(22,214,195,.13)}
-      .bw-thumb{width:78px;height:64px;border-radius:6px;background:#06121f;flex:none;
-        image-rendering:pixelated;object-fit:cover;border:1px solid rgba(255,255,255,.08)}
-      .bw-thumb-wrap{position:relative;width:78px;height:64px;flex:none}
-      .bw-thumb-wrap .bw-spin{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;
-        font-size:10px;color:#6fa;opacity:.8}
-      .bw-meta{flex:1;min-width:0;display:flex;flex-direction:column;gap:3px;justify-content:center}
-      .bw-row1{display:flex;align-items:center;gap:6px}
-      .bw-badge{font:700 9px system-ui;padding:2px 5px;border-radius:4px;letter-spacing:.4px}
-      .bw-badge.N20{background:#16d6c3;color:#04222c}
-      .bw-badge.NPP{background:#5b8def;color:#06122a}
-      .bw-badge.N21{background:#c98bff;color:#1c0830}
-      .bw-dn{font-size:11px}
-      .bw-time{font:600 12px system-ui;color:#eaf6f8;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-      .bw-sub{font:500 10px system-ui;color:#8fb6bf;display:flex;gap:8px;align-items:center}
-      .bw-clarbar{flex:1;height:5px;border-radius:3px;background:rgba(255,255,255,.1);overflow:hidden;min-width:36px}
-      .bw-clarbar > i{display:block;height:100%;background:linear-gradient(90deg,#16d6c3,#7CFFB2)}
-      #bw-runs-foot{padding:7px 12px;border-top:1px solid rgba(255,255,255,.08);font:500 10px system-ui;color:#7fa}
-      #bw-runs-foot button{background:transparent;border:1px solid rgba(255,120,120,.4);color:#ffb3b3;border-radius:6px;
-        padding:3px 8px;font-size:10px;cursor:pointer;float:right}
+        padding:9px 12px;font:700 12px/1 system-ui,sans-serif;cursor:pointer;box-shadow:0 2px 12px rgba(0,0,0,.4)}
+      #bw-img-btn:hover{background:rgba(16,214,195,.2)}
+      #bw-img-modal{position:fixed;inset:18px;z-index:1200;background:rgba(6,18,32,.985);backdrop-filter:blur(8px);
+        border:1px solid rgba(22,214,195,.3);border-radius:16px;display:none;flex-direction:column;color:#e6f2f5;
+        box-shadow:0 18px 60px rgba(0,0,0,.6);overflow:hidden}
+      #bw-img-modal.open{display:flex}
+      #bw-img-top{display:flex;align-items:center;gap:14px;padding:14px 18px;border-bottom:1px solid rgba(22,214,195,.22)}
+      #bw-img-top h2{margin:0;font:800 16px system-ui;letter-spacing:.3px;color:#16d6c3}
+      #bw-img-tabs{display:flex;gap:6px;flex:1}
+      .bw-tab{background:rgba(255,255,255,.05);border:1px solid rgba(255,255,255,.12);color:#bcd;
+        border-radius:999px;padding:7px 15px;font:600 12px system-ui;cursor:pointer}
+      .bw-tab:hover{border-color:rgba(22,214,195,.5);color:#dff}
+      .bw-tab.active{background:#16d6c3;border-color:#16d6c3;color:#03222b}
+      #bw-img-x{background:transparent;border:1px solid rgba(255,255,255,.25);color:#cfe;border-radius:8px;
+        width:34px;height:34px;font-size:16px;cursor:pointer}
+      #bw-img-x:hover{border-color:#ff8;color:#ff8}
+      #bw-img-sub{display:flex;align-items:center;gap:12px;padding:9px 18px;border-bottom:1px solid rgba(255,255,255,.07);
+        font:500 12px system-ui;color:#9fc7cf}
+      #bw-img-sub button{background:transparent;border:1px solid rgba(255,255,255,.22);color:#cfe;border-radius:6px;
+        padding:4px 10px;font:600 11px system-ui;cursor:pointer}
+      #bw-img-sub button:hover{border-color:#16d6c3;color:#16d6c3}
+      #bw-img-legend{margin-left:auto;display:flex;align-items:center;gap:7px;font-size:11px;color:#9fc7cf}
+      #bw-img-legend .ramp{width:120px;height:9px;border-radius:5px;
+        background:linear-gradient(90deg,hsl(240 80% 55%),hsl(180 80% 50%),hsl(120 80% 50%),hsl(60 90% 55%),hsl(0 85% 55%))}
+      #bw-img-grid{flex:1;overflow-y:auto;padding:16px;display:grid;gap:13px;
+        grid-template-columns:repeat(auto-fill,minmax(168px,1fr));align-content:start}
+      .bw-gcard{border:1px solid rgba(255,255,255,.1);border-radius:11px;overflow:hidden;cursor:pointer;
+        background:rgba(255,255,255,.025);transition:border-color .15s,transform .12s,background .15s}
+      .bw-gcard:hover{border-color:rgba(22,214,195,.65);background:rgba(22,214,195,.08);transform:translateY(-2px)}
+      .bw-gcard.sel{border-color:#16d6c3;box-shadow:0 0 0 1px #16d6c3 inset}
+      .bw-gthumb-wrap{position:relative;width:100%;aspect-ratio:16/10;background:#0a1622;display:flex;align-items:center;justify-content:center}
+      .bw-gthumb{width:100%;height:100%;object-fit:cover;display:block;image-rendering:auto}
+      .bw-gspin{position:absolute;font:600 11px system-ui;color:#5cc;opacity:.8}
+      .bw-gbadge{position:absolute;top:7px;left:7px;font:800 9px system-ui;padding:3px 6px;border-radius:5px;letter-spacing:.5px}
+      .bw-gbadge.N20{background:#16d6c3;color:#03222b}
+      .bw-gbadge.NPP{background:#5b8def;color:#06122a}
+      .bw-gbadge.N21{background:#c98bff;color:#1c0830}
+      .bw-gdn{position:absolute;top:6px;right:7px;font-size:13px;filter:drop-shadow(0 1px 2px #000)}
+      .bw-gclar{position:absolute;bottom:0;left:0;right:0;height:4px;background:rgba(0,0,0,.4)}
+      .bw-gclar > i{display:block;height:100%;background:linear-gradient(90deg,#16d6c3,#9CFFC0)}
+      .bw-ginfo{padding:8px 9px;display:flex;flex-direction:column;gap:2px}
+      .bw-gtime{font:700 12px system-ui;color:#eaf6f8}
+      .bw-gmeta{font:500 11px system-ui;color:#8fb6bf;display:flex;justify-content:space-between}
+      .bw-empty{grid-column:1/-1;display:flex;flex-direction:column;align-items:center;justify-content:center;
+        gap:10px;padding:60px 24px;text-align:center;color:#7f9aa3}
+      .bw-empty h3{margin:0;color:#bcd;font:700 15px system-ui}
+      .bw-empty p{margin:0;max-width:460px;line-height:1.5;font:500 13px system-ui}
+      .bw-empty .tag{font:700 11px system-ui;letter-spacing:.5px;color:#16d6c3;border:1px solid rgba(22,214,195,.4);
+        padding:4px 10px;border-radius:999px}
     `;
     document.head.appendChild(style);
 
     btn=document.createElement('div');
-    btn.id='bw-runs-btn';
-    btn.innerHTML='🛰 Passes';
-    btn.title='Browse individual satellite SST overpasses';
-    btn.onclick=togglePanel;
+    btn.id='bw-img-btn'; btn.innerHTML='🛰 Imagery';
+    btn.title='Browse satellite imagery — passes & composites';
+    btn.onclick=()=>openModal();
 
-    panel=document.createElement('div');
-    panel.id='bw-runs-panel';
-    panel.innerHTML=
-      '<div id="bw-runs-head"><h3>SST Satellite Passes</h3>'+
-      '<button id="bw-runs-refresh">↻</button>'+
-      '<button id="bw-runs-close">✕</button></div>'+
-      '<div id="bw-runs-status">—</div>'+
-      '<div id="bw-runs-list"></div>'+
-      '<div id="bw-runs-foot"><span id="bw-runs-foot-txt">Newest first · current map view</span>'+
-      '<button id="bw-runs-clear">Clear overlay</button></div>';
+    modal=document.createElement('div'); modal.id='bw-img-modal';
+    modal.innerHTML=
+      '<div id="bw-img-top"><h2>Satellite Imagery</h2>'+
+      '<div id="bw-img-tabs">'+
+        '<button class="bw-tab active" data-tab="sst">SST</button>'+
+        '<button class="bw-tab" data-tab="chl">Chlorophyll</button>'+
+        '<button class="bw-tab" data-tab="cur">Currents</button>'+
+      '</div>'+
+      '<button id="bw-img-x">✕</button></div>'+
+      '<div id="bw-img-sub"><span id="bw-img-status">—</span>'+
+        '<button id="bw-img-refresh">↻ Refresh</button>'+
+        '<button id="bw-img-clear">Clear overlay</button>'+
+        '<span id="bw-img-legend"><span>cool</span><span class="ramp"></span><span>warm</span></span>'+
+      '</div>'+
+      '<div id="bw-img-grid"></div>';
 
-    const host=document.getElementById('mapwrap') || document.body;
-    host.appendChild(btn);
-    host.appendChild(panel);
-
-    listEl=panel.querySelector('#bw-runs-list');
-    statusEl=panel.querySelector('#bw-runs-status');
-    panel.querySelector('#bw-runs-close').onclick=()=>panel.classList.remove('open');
-    panel.querySelector('#bw-runs-refresh').onclick=()=>loadList(true);
-    panel.querySelector('#bw-runs-clear').onclick=clearOverlay;
+    document.body.appendChild(btn);
+    document.body.appendChild(modal);
+    gridEl=modal.querySelector('#bw-img-grid');
+    statusEl=modal.querySelector('#bw-img-status');
+    tabsEl=modal.querySelector('#bw-img-tabs');
+    modal.querySelector('#bw-img-x').onclick=()=>modal.classList.remove('open');
+    modal.querySelector('#bw-img-refresh').onclick=()=>{ if(activeTab==='sst'){ state.sst.loaded=false; loadSST(); } };
+    modal.querySelector('#bw-img-clear').onclick=clearOverlay;
+    tabsEl.querySelectorAll('.bw-tab').forEach(t=>{
+      t.onclick=()=>switchTab(t.dataset.tab);
+    });
   }
 
-  function togglePanel(){
-    if(!panel) return;
-    panel.classList.toggle('open');
-    if(panel.classList.contains('open') && !lastPasses.length) loadList(false);
+  function openModal(){ modal.classList.add('open'); switchTab(activeTab); }
+
+  function switchTab(tab){
+    activeTab=tab;
+    tabsEl.querySelectorAll('.bw-tab').forEach(t=>t.classList.toggle('active', t.dataset.tab===tab));
+    const legend=modal.querySelector('#bw-img-legend');
+    legend.style.display = tab==='sst' ? 'flex':'none';
+    if(tab==='sst'){ loadSST(); }
+    else if(tab==='chl'){ renderComingSoon('Chlorophyll','CHL · daily composites',
+      'VIIRS chlorophyll is published as daily per-sensor composites (NOAA-20, SNPP, plus 8-day blends) rather than individual overpasses. This page will show those daily images across sensors as a thumbnail grid — wiring next, using the same data path we proved for SST.'); }
+    else { renderComingSoon('Ocean Currents','CURRENTS · daily field',
+      'Currents are a daily blended geostrophic field, not discrete satellite passes. This page will show recent daily snapshots as thumbnails you can load onto the map — wiring next.'); }
   }
 
-  // ---------- list ----------
-  async function loadList(force){
-    if(loadingList) return;
-    loadingList=true;
-    statusEl.textContent='Finding passes…';
-    listEl.innerHTML='';
+  function renderComingSoon(title, tag, body){
+    statusEl.textContent=title;
+    gridEl.innerHTML='<div class="bw-empty"><span class="tag">'+tag+'</span><h3>'+title+' imagery</h3><p>'+body+'</p></div>';
+  }
+
+  // ---------- SST ----------
+  async function loadSST(force){
+    const S=state.sst;
+    if(S.loading) return;
+    if(S.loaded && !force){ renderCards(S.passes); loadThumbs(S.passes); return; }
+    S.loading=true;
+    statusEl.textContent='Finding passes over current view…';
+    gridEl.innerHTML='<div class="bw-empty"><h3>Loading passes…</h3><p>Scanning NOAA-20 and NPP overpasses across the last 96 hours.</p></div>';
     try{
       const bp=boxParams();
       const url=`${FN}?mode=list&hours=96&${qs({minLat:bp.minLat,maxLat:bp.maxLat,minLon:bp.minLon,maxLon:bp.maxLon})}&cb=${Date.now()}`;
-      const r=await fetch(url);
-      const j=await r.json();
-      if(j.error){ statusEl.textContent='Error: '+(j.note||j.error); loadingList=false; return; }
-      lastPasses=j.passes||[];
+      const r=await fetch(url); const j=await r.json();
+      if(j.error){ statusEl.textContent='Error: '+(j.note||j.error); gridEl.innerHTML=''; S.loading=false; return; }
+      S.passes=j.passes||[]; S.loaded=true;
       const c=j.counts||{};
-      statusEl.textContent=`${lastPasses.length} passes · N20 ${c.N20||0} · NPP ${c.NPP||0} · N21 ${c.N21||0}`;
-      renderCards(lastPasses);
-      loadThumbs(lastPasses);
-    }catch(e){
-      statusEl.textContent='Failed to load passes';
-    }
-    loadingList=false;
+      statusEl.textContent=`${S.passes.length} SST passes · N20 ${c.N20||0} · NPP ${c.NPP||0} · N21 ${c.N21||0}`;
+      if(!S.passes.length){ gridEl.innerHTML='<div class="bw-empty"><h3>No passes in view</h3><p>No SST overpasses intersect the current map view in the last 96 h. Pan/zoom and hit Refresh.</p></div>'; }
+      else { renderCards(S.passes); loadThumbs(S.passes); }
+    }catch(e){ statusEl.textContent='Failed to load passes'; gridEl.innerHTML=''; }
+    S.loading=false;
   }
 
   function renderCards(passes){
-    listEl.innerHTML='';
-    const lonC=(boxParams().minLon+boxParams().maxLon)/2;
+    gridEl.innerHTML='';
+    const bp=boxParams(); const lonC=(bp.minLon+bp.maxLon)/2;
     for(const p of passes){
       const card=document.createElement('div');
-      card.className='bw-card'+(p.granule===selectedGranule?' sel':'');
+      card.className='bw-gcard'+(p.granule===selectedGranule?' sel':'');
       const day=isDay(p.time_start, lonC);
       card.innerHTML=
-        '<div class="bw-thumb-wrap"><div class="bw-spin">···</div></div>'+
-        '<div class="bw-meta">'+
-          '<div class="bw-row1"><span class="bw-badge '+p.sensor+'">'+p.sensor+'</span>'+
-            '<span class="bw-dn">'+(day?'☀️':'🌙')+'</span>'+
-            '<span class="bw-time">'+fmtTime(p.time_start)+'</span></div>'+
-          '<div class="bw-sub"><span class="bw-clar">—</span>'+
-            '<span class="bw-clarbar"><i style="width:0%"></i></span></div>'+
-          '<div class="bw-sub bw-temp" style="color:#bfe">—</div>'+
-        '</div>';
+        '<div class="bw-gthumb-wrap">'+
+          '<span class="bw-gspin">loading…</span>'+
+          '<span class="bw-gbadge '+p.sensor+'">'+p.sensor+'</span>'+
+          '<span class="bw-gdn">'+(day?'☀️':'🌙')+'</span>'+
+          '<span class="bw-gclar"><i style="width:0%"></i></span>'+
+        '</div>'+
+        '<div class="bw-ginfo"><span class="bw-gtime">'+fmtTime(p.time_start)+'</span>'+
+          '<span class="bw-gmeta"><span class="bw-gtemp">—</span><span class="bw-gcl">—</span></span></div>';
       card.onclick=()=>selectPass(p);
-      listEl.appendChild(card);
-      cardEls[p.granule]={root:card, wrap:card.querySelector('.bw-thumb-wrap'),
-        clar:card.querySelector('.bw-clar'), bar:card.querySelector('.bw-clarbar > i'),
-        temp:card.querySelector('.bw-temp')};
-      const cached=tileCache[p.granule];
-      if(cached) applyTileToCard(p.granule, cached);
+      gridEl.appendChild(card);
+      cardEls[p.granule]={root:card, wrap:card.querySelector('.bw-gthumb-wrap'),
+        bar:card.querySelector('.bw-gclar > i'), temp:card.querySelector('.bw-gtemp'),
+        cl:card.querySelector('.bw-gcl'), spin:card.querySelector('.bw-gspin')};
+      if(tileCache[p.granule]) applyTile(p.granule, tileCache[p.granule]);
     }
   }
 
-  function applyTileToCard(granule, tile){
-    const el=cardEls[granule]; if(!el) return;
-    if(tile && tile.grid){
-      const cv=gridCanvas(tile.grid, tile.nLat, tile.nLon);
-      cv.className='bw-thumb';
-      el.wrap.innerHTML='';
-      el.wrap.appendChild(cv);
-      el.clar.textContent=(tile.clarity_pct!=null?tile.clarity_pct:'—')+'% clear';
-      el.bar.style.width=(tile.clarity_pct||0)+'%';
-      if(tile.sst){
-        el.temp.textContent=Math.round(cToF(tile.sst.min_c))+'–'+Math.round(cToF(tile.sst.max_c))+'°F';
-      }
-    }
+  function applyTile(granule, tile){
+    const el=cardEls[granule]; if(!el || !tile || !tile.grid) return;
+    const cv=gridCanvas(tile.grid, tile.nLat, tile.nLon, 'gray');
+    cv.className='bw-gthumb';
+    if(el.spin) el.spin.remove();
+    const old=el.wrap.querySelector('canvas'); if(old) old.remove();
+    el.wrap.insertBefore(cv, el.wrap.firstChild);
+    el.bar.style.width=(tile.clarity_pct||0)+'%';
+    el.cl.textContent=(tile.clarity_pct!=null?tile.clarity_pct+'% clear':'');
+    if(tile.sst) el.temp.textContent=Math.round(cToF(tile.sst.min_c))+'–'+Math.round(cToF(tile.sst.max_c))+'°F';
   }
 
-  // ---------- thumbnail loader (concurrency-limited) ----------
   async function loadThumbs(passes){
-    let i=0; const N=3;
+    let i=0; const N=4;
     async function worker(){
       while(i<passes.length){
         const p=passes[i++];
-        if(tileCache[p.granule]){ applyTileToCard(p.granule, tileCache[p.granule]); continue; }
+        if(tileCache[p.granule]){ applyTile(p.granule, tileCache[p.granule]); continue; }
         try{
           const bp=boxParams();
           const url=`${FN}?mode=tile&stride=4&g=${encodeURIComponent(p.opendap)}&${qs({minLat:bp.minLat,maxLat:bp.maxLat,minLon:bp.minLon,maxLon:bp.maxLon})}`;
           const r=await fetch(url); const j=await r.json();
-          if(!j.error){ tileCache[p.granule]=j; applyTileToCard(p.granule, j); }
-          else { const el=cardEls[p.granule]; if(el) el.clar.textContent='no data'; }
-        }catch(e){ const el=cardEls[p.granule]; if(el) el.clar.textContent='err'; }
+          if(!j.error){ tileCache[p.granule]=j; applyTile(p.granule, j); }
+          else { const el=cardEls[p.granule]; if(el&&el.spin) el.spin.textContent='no data'; }
+        }catch(e){ const el=cardEls[p.granule]; if(el&&el.spin) el.spin.textContent='err'; }
       }
     }
     await Promise.all(Array.from({length:N},()=>worker()));
   }
 
-  // ---------- select -> map overlay ----------
   async function selectPass(p){
     selectedGranule=p.granule;
     Object.values(cardEls).forEach(e=>e.root.classList.remove('sel'));
     if(cardEls[p.granule]) cardEls[p.granule].root.classList.add('sel');
-    statusEl.textContent='Loading '+p.sensor+' '+fmtTime(p.time_start)+'…';
+    statusEl.textContent='Loading '+p.sensor+' '+fmtTime(p.time_start)+' onto map…';
     try{
-      const bp=boxParams(160); // finer for the map
+      const bp=boxParams(180);
       const url=`${FN}?mode=tile&stride=${bp.stride}&g=${encodeURIComponent(p.opendap)}&${qs({minLat:bp.minLat,maxLat:bp.maxLat,minLon:bp.minLon,maxLon:bp.maxLon})}`;
       const r=await fetch(url); const j=await r.json();
       if(j.error||!j.grid){ statusEl.textContent='No data for that pass in view'; return; }
-      const cv=gridCanvas(j.grid, j.nLat, j.nLon);
+      const cv=gridCanvas(j.grid, j.nLat, j.nLon, 'transparent');
       const dataUrl=cv.toDataURL('image/png');
-      const b=j.bounds;
-      const bounds=[[b.south,b.west],[b.north,b.east]];
+      const b=j.bounds; const bounds=[[b.south,b.west],[b.north,b.east]];
       if(galleryOverlay){ galleryOverlay.setUrl(dataUrl); galleryOverlay.setBounds(bounds); galleryOverlay.setOpacity(0.82); }
       else if(typeof map!=='undefined' && map){
         galleryOverlay=L.imageOverlay(dataUrl,bounds,{opacity:0.82,pane:'satPane',interactive:false}).addTo(map);
       }
       const cl=j.clarity_pct!=null?j.clarity_pct+'% clear':'';
       const tp=j.sst?(' · '+Math.round(cToF(j.sst.min_c))+'–'+Math.round(cToF(j.sst.max_c))+'°F'):'';
-      statusEl.textContent=p.sensor+' '+fmtTime(p.time_start)+' · '+cl+tp;
+      statusEl.textContent='Loaded '+p.sensor+' '+fmtTime(p.time_start)+' · '+cl+tp+' — close to view map';
+      modal.classList.remove('open');
     }catch(e){ statusEl.textContent='Failed to load pass'; }
   }
 
   function clearOverlay(){
-    if(galleryOverlay && typeof map!=='undefined' && map){ map.removeLayer(galleryOverlay); }
+    if(galleryOverlay && typeof map!=='undefined' && map) map.removeLayer(galleryOverlay);
     galleryOverlay=null; selectedGranule=null;
     Object.values(cardEls).forEach(e=>e.root.classList.remove('sel'));
     if(statusEl) statusEl.textContent='Overlay cleared';
   }
 
-  // refresh list every 4h while panel has been opened at least once
-  setInterval(()=>{ if(lastPasses.length) loadList(true); }, 4*3600*1000);
+  setInterval(()=>{ if(state.sst.loaded){ state.sst.loaded=false; if(activeTab==='sst'&&modal.classList.contains('open')) loadSST(); } }, 4*3600*1000);
 
   function init(){ buildUI(); }
-  if(document.readyState==='loading') document.addEventListener('DOMContentLoaded', init);
-  else init();
+  if(document.readyState==='loading') document.addEventListener('DOMContentLoaded', init); else init();
 })();
 
 
