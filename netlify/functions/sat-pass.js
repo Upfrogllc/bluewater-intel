@@ -42,7 +42,7 @@ exports.handler = async (event) => {
   const userVar = (p.uservar ? [p.uservar] : []).concat(USER_VARS).find(k => process.env[k]);
   const passVar = (p.passvar ? [p.passvar] : []).concat(PASS_VARS).find(k => process.env[k]);
 
-  const out = { step: 'diagnostic', short_name, bbox,
+  const out = { step: 'diagnostic', version: 'probe-v3', short_name, bbox,
     tokenVar: tokenVar || null, userVar: userVar || null, passVar: passVar || null };
 
   try {
@@ -76,18 +76,30 @@ exports.handler = async (event) => {
     const dmrText = await d.text();
     out.dmr = {
       url: dmrUrl, status: d.status, content_type: d.headers.get('content-type'),
-      variables: [...dmrText.matchAll(/<(Float32|Float64|Int16|Int32|Int8|Byte|UInt16|UInt8)\s+name="([^"]+)"/g)].map(m => m[2]).slice(0, 50),
       dimensions: [...dmrText.matchAll(/<Dimension\s+name="([^"]+)"\s+size="(\d+)"/g)].map(m => ({ name: m[1], size: +m[2] })),
-      head: dmrText.slice(0, 1800),
+      sst: varInfo(dmrText, 'sea_surface_temperature'),
+      quality_level: varInfo(dmrText, 'quality_level'),
+      lat: varInfo(dmrText, 'lat'),
+      lon: varInfo(dmrText, 'lon'),
     };
 
     // 4) optional: tiny read of coordinate arrays to learn grid extent + order
     if (p.sample === '1') {
-      const ascUrl = `${opendap.href}.ascii?latitude[0:1:3],longitude[0:1:3]`;
+      // read the FIRST and LAST lat/lon values to learn grid origin, spacing, and order
+      const enc = (x) => x.replace(/\[/g, '%5B').replace(/\]/g, '%5D');
+      const asc = `${opendap.href}.ascii?` + enc('lat[0:8999:8999],lon[0:17999:17999]');
       try {
-        const a = await fetch(ascUrl, { headers: auth, redirect: 'follow', signal: AbortSignal.timeout(8000) });
-        out.sample = { url: ascUrl, status: a.status, body: (await a.text()).slice(0, 900) };
-      } catch (e) { out.sample = { url: ascUrl, error: String(e.message || e) }; }
+        const a = await fetch(asc, { headers: auth, redirect: 'follow', signal: AbortSignal.timeout(8000) });
+        out.coords_ascii = { url: asc, status: a.status, body: (await a.text()).slice(0, 600) };
+      } catch (e) { out.coords_ascii = { url: asc, error: String(e.message || e) }; }
+      if (!out.coords_ascii || out.coords_ascii.status !== 200) {
+        const ce = encodeURIComponent('/lat[0:8999:8999];/lon[0:17999:17999]');
+        const csv = `${opendap.href}.dap.csv?dap4.ce=${ce}`;
+        try {
+          const a = await fetch(csv, { headers: auth, redirect: 'follow', signal: AbortSignal.timeout(8000) });
+          out.coords_dap4 = { url: csv, status: a.status, body: (await a.text()).slice(0, 600) };
+        } catch (e) { out.coords_dap4 = { url: csv, error: String(e.message || e) }; }
+      }
     }
     return done(200, out);
   } catch (e) {
@@ -119,6 +131,21 @@ async function getToken(user, pass, out) {
   _tokCache = tok;
   out.token = { source: 'created', expires: tok.expiration_date };
   return tok.access_token;
+}
+
+// Pull a variable's type + key attributes out of the DAP4 DMR XML
+function varInfo(dmr, name) {
+  const m = dmr.match(new RegExp('<(Float32|Float64|Int8|Int16|Int32|Int64|Byte|UByte|UInt8|UInt16|UInt32)\\s+name="' + name + '">'));
+  if (!m) return null;
+  const type = m[1];
+  const end = dmr.indexOf('</' + type + '>', m.index);
+  const block = end > -1 ? dmr.slice(m.index, end) : dmr.slice(m.index, m.index + 2000);
+  const attrs = {};
+  for (const a of block.matchAll(/<Attribute\s+name="([^"]+)"[^>]*>\s*<Value>([^<]*)<\/Value>/g)) attrs[a[1]] = a[2];
+  const keep = ['units', 'scale_factor', 'add_offset', '_FillValue', 'valid_min', 'valid_max', 'actual_range', 'standard_name', 'flag_meanings'];
+  const picked = {};
+  for (const k of keep) if (k in attrs) picked[k] = attrs[k];
+  return { type, attrs: picked };
 }
 
 function num(v, d) { const n = parseFloat(v); return Number.isFinite(n) ? n : d; }
