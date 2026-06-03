@@ -1,20 +1,22 @@
 // sat-pass.js — Netlify function (STEP 1: auth + structure probe)
 //
-// You stored NASA_EARTHDATA_USER / NASA_EARTHDATA_PASS in Netlify. This function
-// exchanges those credentials for an Earthdata bearer token (reusing an existing
-// one if you have a valid token, creating one only if needed — respecting the
-// 2-token limit), caches it on the warm instance, then uses it to ask NASA's
-// OPeNDAP server for one real SST overpass's internal structure (.dmr).
+// Auth, in priority order:
+//   1) A direct Earthdata bearer token in env (NASA_EARTHDATA_TOKEN etc.) — preferred.
+//   2) NASA_EARTHDATA_USER / NASA_EARTHDATA_PASS, exchanged for a token at runtime
+//      (reuses an existing valid token; creates one only if needed).
 //
-// Deploy, then open:
-//   /.netlify/functions/sat-pass?diagnose=1&sample=1
-// and paste me the JSON. It never returns your password or the token value —
-// only var names, statuses, the token's expiry date, and the file structure.
+// Then it finds the most recent NOAA-20 SST overpass over the box (CMR, no auth)
+// and asks NASA OPeNDAP for that granule's DAP4 metadata (.dmr) so we learn the
+// exact variable + lat/lon grid layout before writing the subset/render step.
+//
+// Deploy, then open:  /.netlify/functions/sat-pass?diagnose=1&sample=1
+// Never returns the password or token value — only var names, statuses, the
+// token's expiry, and the file structure.
 
 const CMR = 'https://cmr.earthdata.nasa.gov/search/granules.json';
 const EDL = 'https://urs.earthdata.nasa.gov';
 
-let _tokCache = null; // { access_token, expiration_date } reused across warm invocations
+let _tokCache = null;
 
 exports.handler = async (event) => {
   const headers = {
@@ -33,12 +35,15 @@ exports.handler = async (event) => {
   const bbox = `${minLon},${minLat},${maxLon},${maxLat}`;
   const start = new Date(Date.now() - hours * 3600 * 1000).toISOString();
 
+  const TOKEN_VARS = ['NASA_EARTHDATA_TOKEN', 'EARTHDATA_TOKEN', 'EARTHDATA_LOGIN_TOKEN', 'EDL_TOKEN', 'NASA_TOKEN'];
   const USER_VARS = ['NASA_EARTHDATA_USER', 'EARTHDATA_USER', 'EARTHDATA_USERNAME', 'EDL_USER', 'URS_USER'];
   const PASS_VARS = ['NASA_EARTHDATA_PASS', 'EARTHDATA_PASS', 'EARTHDATA_PASSWORD', 'EDL_PASS', 'URS_PASS'];
+  const tokenVar = (p.tokenvar ? [p.tokenvar] : []).concat(TOKEN_VARS).find(k => process.env[k]);
   const userVar = (p.uservar ? [p.uservar] : []).concat(USER_VARS).find(k => process.env[k]);
   const passVar = (p.passvar ? [p.passvar] : []).concat(PASS_VARS).find(k => process.env[k]);
 
-  const out = { step: 'diagnostic', short_name, bbox, userVar: userVar || null, passVar: passVar || null };
+  const out = { step: 'diagnostic', short_name, bbox,
+    tokenVar: tokenVar || null, userVar: userVar || null, passVar: passVar || null };
 
   try {
     // 1) most recent overpass over the box (no auth)
@@ -54,12 +59,13 @@ exports.handler = async (event) => {
     if (!opendap) { out.opendap = 'no OPeNDAP link'; return done(200, out); }
     out.opendap_base = opendap.href;
 
-    if (!userVar || !passVar) { out.note = 'Could not find Earthdata user/pass env vars. Pass ?uservar=NAME&passvar=NAME or check the names.'; return done(200, out); }
-
-    // 2) credentials -> bearer token (reuse existing, create only if needed)
+    // 2) get a bearer token (direct env token preferred, else user/pass exchange)
     let token;
-    try { token = await getToken(process.env[userVar], process.env[passVar], out); }
-    catch (e) { out.token_error = String(e.message || e); return done(200, out); }
+    try {
+      if (tokenVar) { token = process.env[tokenVar]; out.token = { source: `env:${tokenVar}` }; }
+      else if (userVar && passVar) { token = await getToken(process.env[userVar], process.env[passVar], out); }
+      else { out.note = 'No token or user/pass env vars found.'; return done(200, out); }
+    } catch (e) { out.token_error = String(e.message || e); return done(200, out); }
 
     const auth = { Authorization: `Bearer ${token}` };
 
@@ -74,7 +80,7 @@ exports.handler = async (event) => {
       head: dmrText.slice(0, 1800),
     };
 
-    // 4) optional: tiny read of the coordinate arrays to learn grid extent + order
+    // 4) optional: tiny read of coordinate arrays to learn grid extent + order
     if (p.sample === '1') {
       const ascUrl = `${opendap.href}.ascii?latitude[0:1:3],longitude[0:1:3]`;
       try {
@@ -96,20 +102,15 @@ async function getToken(user, pass, out) {
     return _tokCache.access_token;
   }
   const basic = 'Basic ' + Buffer.from(`${user}:${pass}`).toString('base64');
-
-  // reuse an existing valid token if present
   try {
     const r = await fetch(`${EDL}/api/users/tokens`, { headers: { Authorization: basic }, signal: AbortSignal.timeout(6000) });
     if (r.ok) {
       const list = await r.json();
       const valid = Array.isArray(list) && list.find(t => t.access_token && new Date(t.expiration_date).getTime() > now + 86400000);
       if (valid) { _tokCache = valid; out.token = { source: 'reused', expires: valid.expiration_date }; return valid.access_token; }
-    } else {
-      out.token_list_status = r.status; // 401 here => bad credentials
-    }
+    } else { out.token_list_status = r.status; }
   } catch (e) { out.token_list_error = String(e.message || e); }
 
-  // otherwise create one
   const c = await fetch(`${EDL}/api/users/token`, { method: 'POST', headers: { Authorization: basic }, signal: AbortSignal.timeout(6000) });
   const ctext = await c.text();
   if (!c.ok) throw new Error(`token create ${c.status}: ${ctext.slice(0, 200)}`);
