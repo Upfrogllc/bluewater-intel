@@ -1,143 +1,97 @@
 /**
  * currents-resolver.js
- * Netlify Function — Unified current waterfall orchestrator
+ * Netlify Function — current waterfall orchestrator (V2, budget-hardened)
  *
- * This is the single endpoint the frontend calls for current data.
- * It tries sources in priority order and returns the first successful result,
- * annotating the response with confidence metadata so the UI can show
- * data-trust labels (fresh / stale, obs / model, high / medium / low).
+ * Tries sources in priority order, returns the first good grid, annotates with
+ * confidence metadata. Same external contract as before.
  *
- * Priority:
- *   1. CMEMS GLO12    — primary operational field (model, 6h analysis)
- *   2. CMEMS MULTIOBS — observation-fused validation field
- *   3. OSCAR          — satellite background field (5-day lag)
- *   4. Open-Meteo     — wind-proxy fallback (point-by-point, not a true current field)
+ * NETLIFY 10s LIMIT: the whole chain runs under a hard ~9s wall-clock budget.
+ * Each ERDDAP source gets a short timeout; time is always reserved for the
+ * cheap Open-Meteo fallback so a slow/flaky NOAA host can't blow the budget
+ * and trigger a 502.
  *
- * Query params:
- *   minLon, maxLon, minLat, maxLat  — bounding box
- *   date                            — ISO date (optional)
- *   source                          — force a specific source (optional, for UI source switcher)
+ * Waterfall:
+ *   1. GEOSTROPHIC_BLENDED — NOAA CoastWatch blended altimetry geostrophic (0.25°)
+ *   2. GEOSTROPHIC_MIAMI   — NOAA AOML geostrophic (independent host)
+ *   3. OPEN_METEO          — wind proxy, single bounded request, last resort
  *
- * Returns:
- *   {
- *     source, confidence, dataType, staleDays,
- *     timestamp, bbox, resolution,
- *     grid: [ { lat, lon, u, v, speed, dir } ],
- *     fallbackChain: [ { source, reason } ]  // audit trail of skipped sources
- *   }
+ * Query: minLon,maxLon,minLat,maxLat, date (optional), source (optional force)
  */
 
-const BASE_URL = process.env.URL || "https://your-site.netlify.app";
+const BASE_URL = process.env.URL || process.env.DEPLOY_URL || 'https://bluewater-intel.netlify.app';
+
+const BUDGET_MS = 9000;        // stay under Netlify's 10s
+const ERDDAP_MAX_MS = 5000;    // cap per ERDDAP source
+const OPENMETEO_RESERVE_MS = 3200; // keep this much for the fallback
+const OPENMETEO_MAX_MS = 4500;
+const MIN_ATTEMPT_MS = 1200;   // don't start a source with less budget than this
 
 exports.handler = async (event) => {
-  const headers = {
-    "Access-Control-Allow-Origin": "*",
-    "Content-Type": "application/json",
-  };
-
-  if (event.httpMethod === "OPTIONS") {
-    return { statusCode: 204, headers };
-  }
+  const headers = { 'Access-Control-Allow-Origin': '*', 'Content-Type': 'application/json' };
+  if (event.httpMethod === 'OPTIONS') return { statusCode: 204, headers, body: '' };
 
   const p = event.queryStringParameters || {};
   const bbox = {
-    minLon: parseFloat(p.minLon),
-    maxLon: parseFloat(p.maxLon),
-    minLat: parseFloat(p.minLat),
-    maxLat: parseFloat(p.maxLat),
+    minLon: parseFloat(p.minLon), maxLon: parseFloat(p.maxLon),
+    minLat: parseFloat(p.minLat), maxLat: parseFloat(p.maxLat),
   };
   const date = p.date || new Date().toISOString().slice(0, 10);
   const forcedSource = p.source || null;
-
   if (Object.values(bbox).some(isNaN)) {
-    return {
-      statusCode: 400,
-      headers,
-      body: JSON.stringify({ error: "minLon, maxLon, minLat, maxLat required" }),
-    };
+    return { statusCode: 400, headers, body: JSON.stringify({ error: 'minLon, maxLon, minLat, maxLat required' }) };
   }
 
   const bboxQuery = `minLon=${bbox.minLon}&maxLon=${bbox.maxLon}&minLat=${bbox.minLat}&maxLat=${bbox.maxLat}&date=${date}`;
 
-  // -------------------------------------------------------------------------
-  // Source definitions — order is the priority waterfall
-  // -------------------------------------------------------------------------
   const SOURCES = [
-    {
-      id: "CMEMS_GLO12",
-      url: `${BASE_URL}/.netlify/functions/currents-cmems-glo12?${bboxQuery}`,
-      confidence: "high",
-      dataType: "model_analysis",
-      description: "CMEMS GLO12 operational model (1/12°, 6h analysis)",
-      maxStaleDays: 2,
-    },
-    {
-      id: "CMEMS_MULTIOBS",
-      url: `${BASE_URL}/.netlify/functions/currents-cmems-multiobs?${bboxQuery}`,
-      confidence: "high",
-      dataType: "observation_fused",
-      description: "CMEMS MULTIOBS observation-fused surface currents",
-      maxStaleDays: 3,
-    },
-    {
-      id: "OSCAR",
-      url: `${BASE_URL}/.netlify/functions/currents-oscar?${bboxQuery}`,
-      confidence: "medium",
-      dataType: "satellite_observation",
-      description: "OSCAR satellite-derived currents (1°, 5-day lag)",
-      maxStaleDays: 7,
-    },
-    {
-      id: "OPEN_METEO",
-      url: null, // handled inline — point fetch, not a real field
-      confidence: "low",
-      dataType: "wind_proxy",
-      description: "Open-Meteo wind-driven surface proxy (fallback only)",
-      maxStaleDays: 1,
-    },
+    { id: 'GEOSTROPHIC_BLENDED', url: `${BASE_URL}/.netlify/functions/currents-erddap?dataset=blended&${bboxQuery}`,
+      confidence: 'high', dataType: 'satellite_observation',
+      description: 'NOAA CoastWatch blended altimetry geostrophic (0.25°, daily NRT)' },
+    { id: 'GEOSTROPHIC_MIAMI', url: `${BASE_URL}/.netlify/functions/currents-erddap?dataset=miami&${bboxQuery}`,
+      confidence: 'medium', dataType: 'satellite_observation',
+      description: 'NOAA AOML near-real-time geostrophic (independent host fallback)' },
+    { id: 'OPEN_METEO', url: null, confidence: 'low', dataType: 'wind_proxy',
+      description: 'Open-Meteo wind-driven proxy — NOT a real current. Last resort only.' },
   ];
 
-  // -------------------------------------------------------------------------
-  // Waterfall logic
-  // -------------------------------------------------------------------------
   const fallbackChain = [];
-  const sources = forcedSource
-    ? SOURCES.filter((s) => s.id === forcedSource)
-    : SOURCES;
+  const sources = forcedSource ? SOURCES.filter((s) => s.id === forcedSource) : SOURCES;
+  if (sources.length === 0) {
+    return { statusCode: 400, headers, body: JSON.stringify({ error: `Unknown source: ${forcedSource}` }) };
+  }
+
+  const T0 = Date.now();
+  const left = () => BUDGET_MS - (Date.now() - T0);
 
   for (const src of sources) {
-    if (src.id === "OPEN_METEO") {
-      // Last resort: build a sparse grid from Open-Meteo point fetches
+    if (src.id === 'OPEN_METEO') {
+      const t = Math.min(OPENMETEO_MAX_MS, left() - 300);
+      if (t < MIN_ATTEMPT_MS) { fallbackChain.push({ source: src.id, reason: 'budget exhausted' }); break; }
       try {
-        const grid = await fetchOpenMeteoGrid(bbox, date);
+        const grid = await fetchOpenMeteoGrid(bbox, date, t);
+        if (!grid.length) throw new Error('Open-Meteo returned no usable points');
         return success(headers, {
-          ...src,
-          timestamp: date,
-          bbox,
-          resolution: 0.25,
-          grid,
-          fallbackChain,
-          warning: "Open-Meteo is a wind proxy, not a true current observation. Use for rough direction only.",
+          source: src.id, confidence: src.confidence, dataType: src.dataType,
+          timestamp: date, bbox, resolution: 0.5, grid, fallbackChain,
+          warning: 'Wind-driven proxy, NOT a measured current. Direction approximate.',
         });
-      } catch (err) {
-        fallbackChain.push({ source: src.id, reason: err.message });
-        break;
-      }
+      } catch (err) { fallbackChain.push({ source: src.id, reason: err.message }); break; }
     }
 
+    // ERDDAP source — reserve time for the fallback unless a single source was forced
+    const reserve = forcedSource ? 0 : OPENMETEO_RESERVE_MS;
+    const t = Math.min(ERDDAP_MAX_MS, left() - reserve);
+    if (t < MIN_ATTEMPT_MS) { fallbackChain.push({ source: src.id, reason: 'skipped (budget)' }); continue; }
     try {
-      const resp = await fetch(src.url, { signal: AbortSignal.timeout(10000) });
+      const resp = await fetch(src.url, { signal: AbortSignal.timeout(t) });
       if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
       const data = await resp.json();
-      if (!data.grid || data.grid.length === 0) throw new Error("Empty grid returned");
-
+      if (!data.grid || data.grid.length === 0) throw new Error('Empty grid returned');
       return success(headers, {
-        ...src,
-        timestamp: data.timestamp || date,
-        bbox,
-        resolution: data.resolution,
-        grid: data.grid,
-        fallbackChain,
+        source: src.id, confidence: data.confidence || src.confidence,
+        dataType: data.dataType || src.dataType, datasetId: data.datasetId,
+        sourceLabel: data.source, timestamp: data.timestamp || date, staleDays: data.staleDays,
+        bbox, resolution: data.resolution, grid: data.grid, fallbackChain,
       });
     } catch (err) {
       console.warn(`[currents-resolver] ${src.id} failed: ${err.message}`);
@@ -145,94 +99,59 @@ exports.handler = async (event) => {
     }
   }
 
-  // All sources failed
-  return {
-    statusCode: 502,
-    headers,
-    body: JSON.stringify({
-      error: "All current sources failed",
-      fallbackChain,
-    }),
-  };
+  return { statusCode: 502, headers, body: JSON.stringify({ error: 'All current sources failed', fallbackChain }) };
 };
 
-// ---------------------------------------------------------------------------
-// Open-Meteo fallback: sample a sparse grid of points
-// Only used when all real current sources are down.
-// Returns u/v derived from wind components (NOT a true ocean current).
-// ---------------------------------------------------------------------------
-async function fetchOpenMeteoGrid(bbox, date) {
-  const GRID_STEP = 0.25; // ~25km sampling
-  const points = [];
+// ── Open-Meteo last resort: ONE multi-coordinate request, capped grid ────────
+async function fetchOpenMeteoGrid(bbox, date, timeoutMs) {
+  const MAX_PER_AXIS = 8;
+  const lats = sampleAxis(bbox.minLat, bbox.maxLat, MAX_PER_AXIS);
+  const lons = sampleAxis(bbox.minLon, bbox.maxLon, MAX_PER_AXIS);
+  const pts = [];
+  for (const la of lats) for (const lo of lons) pts.push({ lat: la, lon: lo });
+  if (!pts.length) throw new Error('Empty sample grid');
 
-  for (let lat = bbox.minLat; lat <= bbox.maxLat + GRID_STEP * 0.5; lat += GRID_STEP) {
-    for (let lon = bbox.minLon; lon <= bbox.maxLon + GRID_STEP * 0.5; lon += GRID_STEP) {
-      points.push({ lat: parseFloat(lat.toFixed(2)), lon: parseFloat(lon.toFixed(2)) });
-    }
-  }
+  const latParam = pts.map((p) => p.lat.toFixed(3)).join(',');
+  const lonParam = pts.map((p) => p.lon.toFixed(3)).join(',');
+  const url = 'https://api.open-meteo.com/v1/forecast' +
+    `?latitude=${latParam}&longitude=${lonParam}` +
+    '&current=wind_speed_10m,wind_direction_10m&wind_speed_unit=ms&timezone=UTC';
 
-  // Batch fetch — Open-Meteo supports multi-point via ensemble API
-  // For simplicity we fetch sequentially with a small concurrency limit
-  const CONCURRENCY = 5;
-  const results = [];
+  const resp = await fetch(url, { signal: AbortSignal.timeout(timeoutMs || 4000) });
+  if (!resp.ok) throw new Error(`Open-Meteo HTTP ${resp.status}`);
+  const data = await resp.json();
+  const arr = Array.isArray(data) ? data : [data];
 
-  for (let i = 0; i < points.length; i += CONCURRENCY) {
-    const batch = points.slice(i, i + CONCURRENCY);
-    const fetched = await Promise.all(batch.map((pt) => fetchOpenMeteoPoint(pt, date)));
-    results.push(...fetched.filter(Boolean));
-  }
-
-  if (results.length === 0) throw new Error("Open-Meteo returned no data");
-  return results;
-}
-
-async function fetchOpenMeteoPoint(pt, date) {
-  try {
-    const url =
-      `https://api.open-meteo.com/v1/forecast?` +
-      `latitude=${pt.lat}&longitude=${pt.lon}` +
-      `&hourly=windspeed_10m,winddirection_10m` +
-      `&wind_speed_unit=ms` +
-      `&start_date=${date}&end_date=${date}` +
-      `&timezone=UTC`;
-
-    const resp = await fetch(url, { signal: AbortSignal.timeout(8000) });
-    if (!resp.ok) return null;
-    const data = await resp.json();
-
-    // Use the noon value as representative for the day
-    const noonIdx = 12;
-    const wspd = data.hourly?.windspeed_10m?.[noonIdx] ?? 0;
-    const wdir = data.hourly?.winddirection_10m?.[noonIdx] ?? 0;
-
-    // Surface current is very roughly 2-3% of 10m wind (Ekman approximation)
-    // This is a coarse proxy — clearly flagged as low confidence
-    const WIND_DRAG_RATIO = 0.025;
-    const wdirRad = ((270 - wdir) * Math.PI) / 180; // met convention → oceanographic
-    const u = wspd * WIND_DRAG_RATIO * Math.cos(wdirRad);
-    const v = wspd * WIND_DRAG_RATIO * Math.sin(wdirRad);
+  const WIND_DRAG = 0.02;
+  const out = [];
+  for (const loc of arr) {
+    const lat = num(loc.latitude), lon = num(loc.longitude);
+    const wspd = num(loc.current && loc.current.wind_speed_10m);
+    const wdir = num(loc.current && loc.current.wind_direction_10m);
+    if (lat === null || lon === null || wspd === null || wdir === null) continue;
+    const ang = ((270 - wdir) * Math.PI) / 180;
+    const u = wspd * WIND_DRAG * Math.cos(ang);
+    const v = wspd * WIND_DRAG * Math.sin(ang);
     const speed = Math.sqrt(u * u + v * v);
     const dir = (Math.atan2(u, v) * 180) / Math.PI;
-
-    return {
-      lat: pt.lat,
-      lon: pt.lon,
-      u: parseFloat(u.toFixed(4)),
-      v: parseFloat(v.toFixed(4)),
-      speed: parseFloat(speed.toFixed(4)),
-      dir: parseFloat(((dir + 360) % 360).toFixed(1)),
-      windProxy: true,
-    };
-  } catch {
-    return null;
+    out.push({ lat: round(lat, 3), lon: round(lon, 3), u: round(u, 4), v: round(v, 4),
+               speed: round(speed, 4), dir: round((dir + 360) % 360, 1), windProxy: true });
   }
+  return out;
 }
 
-// ---------------------------------------------------------------------------
+function sampleAxis(min, max, maxN) {
+  if (max <= min) return [round(min, 3)];
+  const span = max - min;
+  const n = Math.min(maxN, Math.max(2, Math.round(span / 0.25) + 1));
+  const step = span / (n - 1);
+  const pts = [];
+  for (let i = 0; i < n; i++) pts.push(round(min + i * step, 3));
+  return pts;
+}
+
+function num(x) { if (x === null || x === undefined) return null; const n = parseFloat(x); return Number.isFinite(n) ? n : null; }
+function round(n, d) { const f = Math.pow(10, d); return Math.round(n * f) / f; }
 function success(headers, body) {
-  return {
-    statusCode: 200,
-    headers: { ...headers, "Cache-Control": "public, max-age=1800" },
-    body: JSON.stringify(body),
-  };
+  return { statusCode: 200, headers: { ...headers, 'Cache-Control': 'public, max-age=1800' }, body: JSON.stringify(body) };
 }
